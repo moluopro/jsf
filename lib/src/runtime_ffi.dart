@@ -63,7 +63,7 @@ const String _libName = 'jsf';
 /// - On macOS/iOS: loads from `.framework` bundle.
 /// - On Linux/Android: loads `.so` file.
 /// - On Windows: loads `.dll` file.
-/// 
+///
 /// Throws [UnsupportedError] if the platform is not recognized.
 final DynamicLibrary _dylib = () {
   if (Platform.isMacOS || Platform.isIOS) {

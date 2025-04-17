@@ -3,7 +3,7 @@
  * Github: https://github.com/moluopro
  */
 
-/// An abstract class that defines the interface for a runtime environment 
+/// An abstract class that defines the interface for a runtime environment
 /// capable of evaluating and executing code, as well as managing resources.
 abstract class Runtime {
   /// Evaluates the given [code] and returns the result as a [String].
@@ -14,7 +14,7 @@ abstract class Runtime {
 
   /// Executes an initialization script [code] within the runtime.
   ///
-  /// This method is intended for running setup or configuration code 
+  /// This method is intended for running setup or configuration code
   /// before any evaluations. It does not return a value.
   void execInitScript(String code);
 
