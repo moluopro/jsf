@@ -1,3 +1,7 @@
+## 0.4.1
+
+* add web support
+
 ## 0.3.3
 
 * fix bugs

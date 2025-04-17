@@ -10,6 +10,7 @@ A high performance JavaScript engine, available out of the box in Flutter.
 2. Up-to-date support for the latest QuickJS  
 3. High-performance compilation strategy enabled by default  
 4. Advanced features such as `big number` support enabled by default  
+5. Support for web platform by `dart:js_interop`  
 
 ### Getting Started
 

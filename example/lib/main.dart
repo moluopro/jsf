@@ -26,7 +26,8 @@ class _ExampleState extends State<Example> {
   final _js = JsRuntime();
 
   void _runJS() {
-    final result = _js.eval('44 + 55');
+    var result = _js.eval('44 + 55');
+    // result = _js.eval("(123456789123456789123456789n * 2n).toString()");
     setState(() {
       _result = result;
     });

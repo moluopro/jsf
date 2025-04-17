@@ -10,6 +10,7 @@
 2. 最新的QuickJS支持  
 3. 默认使用高性能编译策略  
 4. 默认开启`big number`等特性  
+5. Web平台支持(通过`dart:js_interop`)  
 
 ### 快速开始
 
