@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.10)
 
-project(jsf_library VERSION 0.2.1 LANGUAGES C)
+project(jsf_library VERSION 0.3.1 LANGUAGES C)
 
 file(GLOB SOURCES "*.c")
 file(GLOB HEADERS "*.h")
@@ -12,7 +12,7 @@ add_library(jsf SHARED
   ${SOURCES}
 )
 
-add_definitions(-DCONFIG_BIGNUM -DCONFIG_VERSION=\"2025-04-16\")
+add_definitions(-DCONFIG_BIGNUM)
 
 set_target_properties(jsf PROPERTIES
   PUBLIC_HEADER ${HEADERS}

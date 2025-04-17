@@ -1,17 +1,30 @@
+# Copyright (C) 2025 moluopro. All rights reserved.
+# Github: https://github.com/moluopro
+
 #
 # To learn more about a Podspec see http://guides.cocoapods.org/syntax/podspec.html.
 # Run `pod lib lint jsf.podspec` to validate before publishing.
 #
 Pod::Spec.new do |s|
   s.name             = 'jsf'
-  s.version          = '0.0.1'
-  s.summary          = 'A new Flutter FFI plugin project.'
+  s.version          = '0.3.1'
+  s.summary          = 'A high performance JavaScript engine.'
   s.description      = <<-DESC
-A new Flutter FFI plugin project.
+A high performance JavaScript engine, available out of the box in Flutter.
                        DESC
-  s.homepage         = 'http://example.com'
+  s.homepage         = 'https://github.com/moluopro/jsf'
   s.license          = { :file => '../LICENSE' }
-  s.author           = { 'Your Company' => 'email@example.com' }
+  s.author           = { 'moluopro' => 'moluopro@gmail.com' }
+
+  system("rm -rf Classes/*")
+  system("cp -r ../src/*.c Classes/")
+  system("cp -r ../src/*.h Classes/")
+  
+  s.pod_target_xcconfig = {
+    'DEFINES_MODULE' => 'YES',
+    'GCC_OPTIMIZATION_LEVEL' => '3',
+    'OTHER_CFLAGS' => '-O3 -march=native -flto -fno-plt -DCONFIG_BIGNUM'
+  }
 
   # This will ensure the source files in Classes/ are included in the native
   # builds of apps using this FFI plugin. Podspec does not support relative
