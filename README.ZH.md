@@ -2,20 +2,19 @@
 
 [English](README.md) &nbsp;&nbsp;&nbsp; [中文](README.ZH.md)  
 
-A high performance JavaScript engine, available out of the box in Flutter.  
+一个高性能、在Flutter中开箱即用的JavaScript引擎  
 
-### Features
+### 特性
 
-1. Simple and ready to use out of the box  
-2. Up-to-date support for the latest [QuickJS](https://github.com/bellard/quickjs)  
-3. High-performance compilation strategy enabled by default  
-4. Advanced features such as `big number` support enabled by default  
+1. 简单，开箱即用  
+2. 最新的QuickJS支持  
+3. 默认使用高性能编译策略  
+4. 默认开启`big number`等特性  
 
-### Getting Started
+### 快速开始
 
-1. Add `jsf` as a [dependency](https://pub.dev/packages/jsf/install) in your `pubspec.yaml` file.  
-
-2. Just use it:  
+1. 在你的`pubspec.yaml`文件中添加`jsf`作为一个[依赖](https://pub.dev/packages/jsf/install)  
+2. 直接像这样使用即可:  
 
 ```dart
 import 'package:flutter/material.dart';

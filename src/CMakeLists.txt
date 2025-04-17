@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.10)
 
-project(jsf_library VERSION 0.1.1 LANGUAGES C)
+project(jsf_library VERSION 0.2.1 LANGUAGES C)
 
 file(GLOB SOURCES "*.c")
 file(GLOB HEADERS "*.h")
