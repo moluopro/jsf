@@ -25,12 +25,17 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-target_compile_options(jsf PRIVATE
-  -O3
-  -march=native
-  -flto
-  -fno-plt
+set(COMMON_COMPILE_OPTIONS
+    -O3
+    -flto
+    -fno-plt
 )
+
+if(NOT ANDROID)
+    list(APPEND COMMON_COMPILE_OPTIONS -march=native)
+endif()
+
+target_compile_options(jsf PRIVATE ${COMMON_COMPILE_OPTIONS})
 
 target_link_options(jsf PRIVATE
   -flto
