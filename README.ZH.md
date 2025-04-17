@@ -13,26 +13,10 @@
 
 ### 快速开始
 
-1. 在你的`pubspec.yaml`文件中添加`jsf`作为一个[依赖](https://pub.dev/packages/jsf/install)  
+1. 在您的`pubspec.yaml`文件中添加`jsf`作为一个[依赖](https://pub.dev/packages/jsf/install)  
 2. 直接像这样使用即可:  
 
 ```dart
-import 'package:flutter/material.dart';
-import 'package:jsf/jsf.dart';
-
-void main() {
-  runApp(const MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const MaterialApp(home: Example());
-  }
-}
-
 class Example extends StatefulWidget {
   const Example({super.key});
 
@@ -85,3 +69,7 @@ class _ExampleState extends State<Example> {
   }
 }
 ```
+
+执行`flutter run`，然后您将看到：  
+
+![pic](pic.png)  

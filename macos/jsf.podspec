@@ -7,7 +7,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'jsf'
-  s.version          = '0.3.1'
+  s.version          = '0.3.2'
   s.summary          = 'A high performance JavaScript engine.'
   s.description      = <<-DESC
 A high performance JavaScript engine, available out of the box in Flutter.
@@ -19,7 +19,7 @@ A high performance JavaScript engine, available out of the box in Flutter.
   system("rm -rf Classes/*")
   system("cp -r ../src/*.c Classes/")
   system("cp -r ../src/*.h Classes/")
-  
+
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'GCC_OPTIMIZATION_LEVEL' => '3',

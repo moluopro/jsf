@@ -7,7 +7,7 @@ A high performance JavaScript engine, available out of the box in Flutter.
 ### Features
 
 1. Simple and ready to use out of the box  
-2. Up-to-date support for the latest [QuickJS](https://github.com/bellard/quickjs)  
+2. Up-to-date support for the latest QuickJS  
 3. High-performance compilation strategy enabled by default  
 4. Advanced features such as `big number` support enabled by default  
 
@@ -18,22 +18,6 @@ A high performance JavaScript engine, available out of the box in Flutter.
 2. Just use it:  
 
 ```dart
-import 'package:flutter/material.dart';
-import 'package:jsf/jsf.dart';
-
-void main() {
-  runApp(const MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const MaterialApp(home: Example());
-  }
-}
-
 class Example extends StatefulWidget {
   const Example({super.key});
 
@@ -86,3 +70,7 @@ class _ExampleState extends State<Example> {
   }
 }
 ```
+
+Run `flutter run`, then you will see:  
+
+![pic](pic.png)  

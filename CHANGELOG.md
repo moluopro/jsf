@@ -1,3 +1,8 @@
+## 0.3.2
+
+* update doc
+* fix bugs
+
 ## 0.3.1
 
 * add mac/ios support
