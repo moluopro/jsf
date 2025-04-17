@@ -72,4 +72,4 @@ class _ExampleState extends State<Example> {
 
 执行`flutter run`，然后您将看到：  
 
-![pic](pic.png)  
+![jsf_pic](pic.png)  
