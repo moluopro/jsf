@@ -10,7 +10,7 @@ A high performance JavaScript engine, available out of the box in Flutter.
 2. Up-to-date support for the latest QuickJS  
 3. High-performance compilation strategy enabled by default  
 4. Advanced features such as `big number` support enabled by default  
-5. Web platform support via `dart:js_interop`  
+5. Web platform support via `js_interop`  
 
 ### Getting Started
 
@@ -75,3 +75,17 @@ class _ExampleState extends State<Example> {
 Run `flutter run`, then you will see:  
 
 ![jsf_pic](https://moluopro.atomgit.net/web/jsf/pic.png)  
+
+### FAQ
+
+1. Why did you create this package?  
+I was previously using the `flutter_js` package but often encountered build errors, and its `quickjs` version was very outdated. Although there were user reports suggesting that the author was working on improvements, no significant progress was observed. Additionally, I couldn't find any suitable alternatives on `pub.dev`, so I decided to develop one myself.  
+
+2. Which platforms are supported?  
+I have performed basic testing on all platforms supported by Flutter, and no issues have been identified so far.  
+
+3. What are the common reasons for build failures?  
+Please ensure your Flutter development environment is properly set up according to the [official documentation](https://docs.flutter.dev/get-started/install). For example, on Linux, make sure to [install the necessary packages](https://docs.flutter.dev/get-started/install/linux/desktop#development-tools), and on macOS, you need to [install Xcode and CocoaPods](https://docs.flutter.dev/get-started/install/macos/mobile-ios#development-tools).  
+
+4. Are there any plans for future updates?  
+The current functionality is sufficient for my personal use, so I do not plan to add new features. However, if you have other requirements, feel free to [submit an issue](https://github.com/moluopro/jsf/issues) to let me know.  

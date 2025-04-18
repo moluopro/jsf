@@ -10,7 +10,7 @@
 2. 最新的QuickJS支持  
 3. 默认使用高性能编译策略  
 4. 默认开启`big number`等特性  
-5. Web平台支持(通过`dart:js_interop`)  
+5. Web平台支持(通过`js_interop`)  
 
 ### 快速开始
 
@@ -74,3 +74,17 @@ class _ExampleState extends State<Example> {
 执行`flutter run`，然后您将看到：  
 
 ![jsf_pic](https://moluopro.atomgit.net/web/jsf/pic.png)  
+
+### 常见问题
+
+1. 为什么要创建这个包？  
+我之前在使用`flutter_js`包，发现很多情况下无法顺利构建，并且它的`quickjs`版本非常旧。我看到有人反馈作者进行优化，但没有相关进展。此外，我在`pub.dev`上没有找到其他合适的替代品，遂决定自己写一个。  
+
+2. 能够运行在哪些平台？  
+我已经在Flutter支持的所有平台进行简单测试，目前暂未发现问题。  
+
+3. 构建失败一般是因为什么？  
+请检查您是否按照[官方文档](https://docs.flutter.dev/get-started/install)配置了Flutter开发环境。比如，Linux下应该[安装相关的包](https://docs.flutter.dev/get-started/install/linux/desktop#development-tools)，MacOS下要[安装xcode和cocoapad](https://docs.flutter.dev/get-started/install/macos/mobile-ios#development-tools)。  
+
+4. 未来有什么更新规划？  
+目前的功能已经足够我个人使用，所以不会增添新的东西。因此，如果您有其他的需求，欢迎提[issue](https://github.com/moluopro/jsf/issues)来告知我。  
