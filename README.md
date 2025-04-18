@@ -74,4 +74,4 @@ class _ExampleState extends State<Example> {
 
 Run `flutter run`, then you will see:  
 
-![jsf_pic](pic.png)  
+![jsf_pic](https://moluopro.atomgit.net/web/jsf/pic.png)  
