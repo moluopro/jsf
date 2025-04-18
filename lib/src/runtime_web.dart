@@ -50,4 +50,4 @@ class JsRuntime implements Runtime {
 ///
 /// This is declared as an external function using `@JS` and `JSInterop`.
 @JS('eval')
-external JSAny jsEval(JSString code);
+external JSAny? jsEval(JSString code);

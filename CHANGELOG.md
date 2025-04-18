@@ -1,3 +1,7 @@
+## 0.4.3
+
+* fix "TypeError: null" in web platform
+
 ## 0.4.2
 
 * update doc

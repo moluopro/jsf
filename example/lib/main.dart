@@ -27,7 +27,10 @@ class _ExampleState extends State<Example> {
 
   void _runJS() {
     var result = _js.eval('44 + 55');
+
+    // test big number
     // result = _js.eval("(123456789123456789123456789n * 2n).toString()");
+    
     setState(() {
       _result = result;
     });
