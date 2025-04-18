@@ -1,5 +1,10 @@
 ## 0.4.1
 
+* update doc
+* fix bugs
+
+## 0.4.1
+
 * add web support
 
 ## 0.3.3
