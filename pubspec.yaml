@@ -1,0 +1,50 @@
+name: jsf
+description: "A high performance JavaScript engine, available out of the box in Flutter."
+version: 0.5.4
+homepage: https://github.com/moluopro/jsf
+
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  windows:
+  web:
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.3
+
+dev_dependencies:
+  ffigen: ^13.0.0
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+topics:
+  - javascript
+  - runtime
+  - qjs
+  - quickjs
+  - engine
+
+
+flutter:
+
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true
+      linux:
+        ffiPlugin: true
+      macos:
+        ffiPlugin: true
+      windows:
+        ffiPlugin: true
