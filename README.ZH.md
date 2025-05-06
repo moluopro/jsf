@@ -120,7 +120,7 @@ JSF为JavaScript中的常见数据类型提供了绑定：
 
 ### 调用JS库
 
-这里我用`Ajv.js`作为例子(与`flutter_js`里一样的案例)：
+这里我用[Ajv.js](https://ajv.js.org)作为例子(与`flutter_js`里一样的案例)：
 
 ```dart
   String ajvJS = await rootBundle.loadString("assets/ajv.js");

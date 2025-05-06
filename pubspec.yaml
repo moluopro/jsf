@@ -1,6 +1,6 @@
 name: jsf
 description: "A high performance JavaScript engine, available out of the box in Flutter."
-version: 0.5.4
+version: 0.6.1
 homepage: https://github.com/moluopro/jsf
 
 platforms:

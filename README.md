@@ -121,7 +121,7 @@ In the example above, the type of `result` depends on the JavaScript code snippe
 
 ### Calling JS Libraries
 
-Here, I’ll use `Ajv.js` as an example (the same example used in `flutter_js`):
+Here, I’ll use [Ajv.js](https://ajv.js.org) as an example (the same example used in `flutter_js`):
 
 ```dart
   String ajvJS = await rootBundle.loadString("assets/ajv.js");

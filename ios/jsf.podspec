@@ -7,7 +7,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'jsf'
-  s.version          = '0.5.4'
+  s.version          = '0.6.1'
   s.summary          = 'A high performance JavaScript engine.'
   s.description      = <<-DESC
 A high performance JavaScript engine, available out of the box in Flutter.

@@ -1,3 +1,9 @@
+## 0.6.1
+
+* added support for importing JS packages
+* `JsRuntime` is no longer a singleton by default
+* added `JS_LoadMjsModule` and `JS_InitConsole`
+
 ## 0.5.4
 
 * update doc
