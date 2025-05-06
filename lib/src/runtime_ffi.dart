@@ -47,6 +47,7 @@ class JsRuntime implements Runtime {
   JsRuntime() {
     runtime = _bindings.JS_NewRuntime();
     context = _bindings.JS_NewContext(runtime);
+    _bindings.JS_InitConsole(context);
   }
 
   /// Evaluates a given JavaScript [code] string within the current context.
@@ -71,6 +72,15 @@ class JsRuntime implements Runtime {
       );
 
       return parseRawResult(context, rawResult, _bindings);
+    });
+  }
+
+  void loadModule(String moduleName, String moduleSource) {
+    using((arena) {
+      _bindings.JS_LoadMjsModule(
+          context,
+          moduleName.toNativeUtf8(allocator: arena).cast<ffi.Char>(),
+          moduleSource.toNativeUtf8(allocator: arena).cast<ffi.Char>());
     });
   }
 

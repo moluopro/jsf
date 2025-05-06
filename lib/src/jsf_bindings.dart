@@ -3436,6 +3436,42 @@ class JsfBindings {
   late final _JS_SetModuleExportList = _JS_SetModuleExportListPtr.asFunction<
       int Function(ffi.Pointer<JSContext>, ffi.Pointer<JSModuleDef>,
           ffi.Pointer<JSCFunctionListEntry>, int)>();
+
+  ffi.Pointer<JSModuleDef> JS_LoadMjsModule(
+    ffi.Pointer<JSContext> ctx,
+    ffi.Pointer<ffi.Char> module_name,
+    ffi.Pointer<ffi.Char> module_source,
+  ) {
+    return _JS_LoadMjsModule(
+      ctx,
+      module_name,
+      module_source,
+    );
+  }
+
+  late final _JS_LoadMjsModulePtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Pointer<JSModuleDef> Function(
+              ffi.Pointer<JSContext>,
+              ffi.Pointer<ffi.Char>,
+              ffi.Pointer<ffi.Char>)>>('JS_LoadMjsModule');
+  late final _JS_LoadMjsModule = _JS_LoadMjsModulePtr.asFunction<
+      ffi.Pointer<JSModuleDef> Function(ffi.Pointer<JSContext>,
+          ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Char>)>();
+
+  void JS_InitConsole(
+    ffi.Pointer<JSContext> ctx,
+  ) {
+    return _JS_InitConsole(
+      ctx,
+    );
+  }
+
+  late final _JS_InitConsolePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<JSContext>)>>(
+          'JS_InitConsole');
+  late final _JS_InitConsole =
+      _JS_InitConsolePtr.asFunction<void Function(ffi.Pointer<JSContext>)>();
 }
 
 final class JSRuntime extends ffi.Opaque {}
