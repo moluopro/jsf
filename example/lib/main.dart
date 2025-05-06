@@ -28,20 +28,29 @@ class _ExampleState extends State<Example> {
   final _js = JsRuntime();
 
   void _runJS() {
-    var result = _js.eval('44 + 55');
-    // var result = _js.eval('1.4 - 12');
-    // var result = _js.eval('true');
-    // var result = _js.eval('aaa');
-    // var result = _js.eval('new Date().toString()');
+    var jsCode = [
+      '44 + 55',
+      '1.4 - 12',
+      'true',
+      'aaa',
+      'new Date().toString()',
+      '(123456789123456789123456789n * 2n)',
+      '(123456789123456789123456789n * 2n).toString()'
+    ];
 
-    // test big number
-    // var result = _js.eval("(123456789123456789123456789n * 2n)");
-    // var result = _js.eval("(123456789123456789123456789n * 2n).toString()");
+    var results = [];
 
-    printDebug(result);
+    for (int i = 0; i < jsCode.length; i++) {
+      var result = _js.eval(jsCode[i]);
+      results.add(result);
+    }
+
+    for (var j = 0; j < results.length; j++) {
+      printDebug(results[j]);
+    }
 
     setState(() {
-      _result = result.toString();
+      _result = results[0].toString();
     });
   }
 

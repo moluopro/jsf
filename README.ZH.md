@@ -82,12 +82,71 @@ class _ExampleState extends State<Example> {
 
 ### 类型绑定
 
-JSF为JavaScript中的常见数据类型提供了绑定，比如int, bigint, double, bool, string, and null.
+JSF为JavaScript中的常见数据类型提供了绑定：
+
+```dart
+  final _js = JsRuntime();
+
+  var jsCode = [
+    '44 + 55',
+    '1.4 - 12',
+    'true',
+    'aaa',
+    'new Date().toString()',
+    '(123456789123456789123456789n * 2n)'
+  ];
+
+  for (int i = 0; i < jsCode.length; i++) {
+    var result = _js.eval(jsCode[i]);
+    print("$result: ${result.runtimeType}");
+  }
+
+  // 输出：
+  // 99: int
+  // -10.6: double
+  // true: bool
+  // null: Null
+  // Tue May 06 2025 19:22:34 GMT+0800: String
+  // 246913578246913578246913578: BigInt
+```
+
+在上面的示例中，`result`的类型取决于被执行的JavaScrip代码片段。
+
+### Big Number
+
+1. 在Native平台，`bigint`的类型是`_BigIntImpl`。
+2. 在Web平台，`bigint`的类型是`JavaScriptBigInt`。
+3. 这两种类型实现了相同的接口，因此在使用上几乎没有差别，无须在意。
+
+### 调用JS库
+
+这里我用`Ajv.js`作为例子(与`flutter_js`里一样的案例)：
+
+```dart
+  String ajvJS = await rootBundle.loadString("assets/ajv.js");
+  String test = await rootBundle.loadString("assets/test.js");
+
+  var ajvIsLoaded = _js.eval("!(typeof ajv == 'undefined')");
+
+  // 判断Ajv.js是否已经导入
+  if (!ajvIsLoaded) {
+    _js.eval("var window = global = globalThis; $ajvJS");
+  }
+
+  var result = _js.eval(test);
+  print(result);
+
+  // 来自Ajv.js的输出结果：
+  // data.id should be >= 0, data.email should match format "email", 
+  // data should have required property 'worker'
+```
+
+可以看到，这里成功调用了`Ajv.js`里的函数。
 
 
 ## 相关项目
 
-* [json_dynamic_widget](https://pub.dev/packages/json_dynamic_widget) 使用`JSF`作为脚本引擎进行热更新([官方插件](https://pub.dev/packages/json_dynamic_widget_plugin_js/versions/2.2.0+1#introduction))  
+* [json_dynamic_widget](https://pub.dev/packages/json_dynamic_widget) 使用`JSF`作为脚本引擎进行热更新([官方插件](https://pub.dev/packages/json_dynamic_widget_plugin_js))  
 
 
 ## 常见问题
