@@ -136,7 +136,7 @@ Here, I’ll use [Ajv.js](https://ajv.js.org) as an example (the same example us
   var result = _js.eval(test);
   print(result);
 
-  // Output from Ajv.js：
+  // Output(from Ajv.js)：
   // data.id should be >= 0, data.email should match format "email", 
   // data should have required property 'worker'
 ```
