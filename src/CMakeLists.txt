@@ -29,6 +29,7 @@ set(COMMON_COMPILE_OPTIONS
     -O3
     -flto
     -fno-plt
+    -fomit-frame-pointer
 )
 
 if(NOT ANDROID)
