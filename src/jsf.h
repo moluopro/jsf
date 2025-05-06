@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include "quickjs.h"
 
 #if _WIN32
 #include <windows.h>
@@ -20,8 +22,5 @@
 #define FFI_PLUGIN_EXPORT
 #endif
 
-// FFI_PLUGIN_EXPORT void qjs_init();
-// FFI_PLUGIN_EXPORT const char* qjs_eval(const char* code);
-// FFI_PLUGIN_EXPORT void qjs_free_result(const char* str);
-// FFI_PLUGIN_EXPORT void qjs_cleanup();
-// FFI_PLUGIN_EXPORT void qjs_exec_init_script(const char* code);
+FFI_PLUGIN_EXPORT JSModuleDef *JS_LoadMjsModule(JSContext *ctx, const char *module_name, const char *module_source);
+FFI_PLUGIN_EXPORT void JS_InitConsole(JSContext *ctx);

@@ -3,51 +3,101 @@
  * Github: https://github.com/moluopro
  */
 
-#include <string.h>
-#include <stdlib.h>
-#include "quickjs.h"
 #include "jsf.h"
 
-// static JSRuntime* runtime = NULL;
-// static JSContext* context = NULL;
+FFI_PLUGIN_EXPORT JSModuleDef *JS_LoadMjsModule(JSContext *ctx, const char *module_name, const char *module_source)
+{
+    if (!module_source || !module_name)
+    {
+        JS_ThrowReferenceError(ctx, "Invalid module name or source");
+        return NULL;
+    }
 
-// FFI_PLUGIN_EXPORT void qjs_init() {
-//     if (!runtime) {
-//         runtime = JS_NewRuntime();
-//         context = JS_NewContext(runtime);
-//     }
-// }
+    JSValue func_val = JS_Eval(ctx, module_source, strlen(module_source), module_name,
+                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    if (JS_IsException(func_val))
+        return NULL;
 
-// FFI_PLUGIN_EXPORT const char* qjs_eval(const char* code) {
-//     if (!context) return "QuickJS not initialized";
+    JSModuleDef *module = JS_VALUE_GET_PTR(func_val);
 
-//     JSValue result = JS_Eval(context, code, strlen(code), "<eval>", JS_EVAL_TYPE_GLOBAL);
-//     if (JS_IsException(result)) {
-//         JSValue err = JS_GetException(context);
-//         const char* err_str = JS_ToCString(context, err);
-//         JS_FreeValue(context, err);
-//         return err_str;
-//     }
+    JSValue ret = JS_EvalFunction(ctx, func_val);
+    if (JS_IsException(ret))
+    {
+        JS_FreeValue(ctx, ret);
+        return NULL;
+    }
+    JS_FreeValue(ctx, ret);
+    return module;
+}
 
-//     const char* str = JS_ToCString(context, result);
-//     JS_FreeValue(context, result);
-//     return str;
-// }
+static JSValue js_console_log(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv)
+{
+    for (int i = 0; i < argc; i++)
+    {
+        const char *str = JS_ToCString(ctx, argv[i]);
+        if (str)
+        {
+            printf("%s", str);
+            JS_FreeCString(ctx, str);
+        }
+        if (i != argc - 1)
+            putchar(' ');
+    }
+    putchar('\n');
+    return JS_UNDEFINED;
+}
 
-// FFI_PLUGIN_EXPORT void qjs_free_result(const char* str) {
-//     if (str && context) {
-//         JS_FreeCString(context, str);
-//     }
-// }
+static JSValue js_console_warn(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv)
+{
+    fputs("Warning: ", stderr);
+    for (int i = 0; i < argc; i++)
+    {
+        const char *str = JS_ToCString(ctx, argv[i]);
+        if (str)
+        {
+            fputs(str, stderr);
+            JS_FreeCString(ctx, str);
+        }
+        if (i != argc - 1)
+            fputc(' ', stderr);
+    }
+    fputc('\n', stderr);
+    return JS_UNDEFINED;
+}
 
-// FFI_PLUGIN_EXPORT void qjs_exec_init_script(const char* code) {
-//     if (!context) return;
-//     JS_Eval(context, code, strlen(code), "<init>", JS_EVAL_TYPE_GLOBAL);
-// }
+static JSValue js_console_error(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv)
+{
+    fputs("Error: ", stderr);
+    for (int i = 0; i < argc; i++)
+    {
+        const char *str = JS_ToCString(ctx, argv[i]);
+        if (str)
+        {
+            fputs(str, stderr);
+            JS_FreeCString(ctx, str);
+        }
+        if (i != argc - 1)
+            fputc(' ', stderr);
+    }
+    fputc('\n', stderr);
+    return JS_UNDEFINED;
+}
 
-// FFI_PLUGIN_EXPORT void qjs_cleanup() {
-//     if (context) JS_FreeContext(context);
-//     if (runtime) JS_FreeRuntime(runtime);
-//     context = NULL;
-//     runtime = NULL;
-// }
+FFI_PLUGIN_EXPORT void JS_InitConsole(JSContext *ctx)
+{
+    JSValue global_obj = JS_GetGlobalObject(ctx);
+    JSValue console = JS_NewObject(ctx);
+
+    JS_SetPropertyStr(ctx, console, "log",
+                      JS_NewCFunction(ctx, js_console_log, "log", 1));
+    JS_SetPropertyStr(ctx, console, "warn",
+                      JS_NewCFunction(ctx, js_console_warn, "warn", 1));
+    JS_SetPropertyStr(ctx, console, "error",
+                      JS_NewCFunction(ctx, js_console_error, "error", 1));
+
+    JS_SetPropertyStr(ctx, global_obj, "console", console);
+    JS_FreeValue(ctx, global_obj);
+}
