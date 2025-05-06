@@ -1,8 +1,8 @@
 // https://github.com/abner/flutter_js/blob/master/example/assets/js/ajv.js
 
-var ajv = new global.Ajv({ allErrors: true, coerceTypes: true });
+var test = new global.Ajv({ allErrors: true, coerceTypes: true });
 
-ajv.addSchema(
+test.addSchema(
     {
         required: ["name", "age", "id", "email", "student", "worker"],
         "properties": {
@@ -27,20 +27,20 @@ ajv.addSchema(
             "worker": {
                 "type": "boolean"
             }
-
         }
-    }, "obj1");
+    }, "someone");
 
 
-const data = {
-    id: -5,
-    name: "Alice",
-    email: "not-an-email",
-    age: 22,
-    student: true
-    // need "worker"
-  };
+(() => {
+    const data = {
+        id: -5,
+        name: "Alice",
+        email: "not-an-email",
+        age: 22,
+        student: true
+        // missing "worker"
+    };
 
-const valid = ajv.validate("obj1", data);
-
-!valid ? ajv.errorsText() : "Yep"
+    const valid = test.validate("someone", data);
+    return !valid ? test.errorsText() : "Yep";
+})();
