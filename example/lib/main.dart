@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter/material.dart';
 import 'package:jsf/jsf.dart';
 
@@ -24,12 +26,9 @@ class Example extends StatefulWidget {
 class _ExampleState extends State<Example> {
   String _result = '';
   final _js = JsRuntime();
-  final _js2 = JsRuntime();
 
   void _runJS() {
-    var result = _js.eval('var a = 44 + 55');
-    result = _js.eval('a + 10');
-     result = _js2.eval('a + 100');
+    var result = _js.eval('44 + 55');
     // var result = _js.eval('1.4 - 12');
     // var result = _js.eval('true');
     // var result = _js.eval('aaa');
@@ -39,9 +38,38 @@ class _ExampleState extends State<Example> {
     // var result = _js.eval("(123456789123456789123456789n * 2n)");
     // var result = _js.eval("(123456789123456789123456789n * 2n).toString()");
 
-    print("------------------------------------------------------------");
-    print("$result: ${result.runtimeType}");
-    print("------------------------------------------------------------");
+    printDebug(result);
+
+    setState(() {
+      _result = result.toString();
+    });
+  }
+
+  void _runJS1() {
+    _js.loadModule("test",
+        "export function add(a, b) { return a + b; } globalThis.test = { add };");
+    var result = _js.eval('test.add(4, 5)');
+
+    printDebug(result);
+
+    setState(() {
+      _result = result.toString();
+    });
+  }
+
+  Future<void> _runJS2() async {
+    var ajvIsLoaded = _js.eval("!(typeof ajv == 'undefined')");
+
+    if (ajvIsLoaded) {
+      return;
+    }
+
+    String ajvJS = await rootBundle.loadString("assets/ajv.js");
+    String test = await rootBundle.loadString("assets/test.js");
+
+    _js.eval("var window = global = globalThis; $ajvJS");
+
+    var result = _js.eval(test);
 
     setState(() {
       _result = result.toString();
@@ -56,19 +84,48 @@ class _ExampleState extends State<Example> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            ElevatedButton(
-              onPressed: _runJS,
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 40,
-                  vertical: 20,
+            Column(
+              children: [
+                ElevatedButton(
+                  onPressed: _runJS,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 40, vertical: 20),
+                    textStyle: const TextStyle(fontSize: 20),
+                  ),
+                  child: const Text('Run: 44 + 55'),
                 ),
-                textStyle: const TextStyle(fontSize: 20),
-              ),
-              child: const Text('Run: 44 + 55'),
+                SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: _runJS1,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 40, vertical: 20),
+                    textStyle: const TextStyle(fontSize: 20),
+                  ),
+                  child: const Text('test.add(4, 5)'),
+                ),
+                SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: _runJS2,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 40, vertical: 20),
+                    textStyle: const TextStyle(fontSize: 20),
+                  ),
+                  child: const Text('Ajv Error Info'),
+                ),
+              ],
             ),
             const SizedBox(height: 20),
-            Text('Get  $_result', style: const TextStyle(fontSize: 20)),
+            SizedBox(
+                width: 550,
+                child: Center(
+                    child: Text(_result,
+                        style: const TextStyle(fontSize: 20),
+                        softWrap: true,
+                        overflow: TextOverflow.visible,
+                        textAlign: TextAlign.center)))
           ],
         ),
       ),
@@ -79,5 +136,13 @@ class _ExampleState extends State<Example> {
   void dispose() {
     _js.dispose();
     super.dispose();
+  }
+}
+
+printDebug(dynamic result) {
+  if (kDebugMode) {
+    print("------------------------------------------------------------");
+    print("$result: ${result.runtimeType}");
+    print("------------------------------------------------------------");
   }
 }
