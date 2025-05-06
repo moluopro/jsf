@@ -45,29 +45,27 @@ class _ExampleState extends State<Example> {
     });
   }
 
-  void _runJS1() {
-    _js.loadModule("test",
-        "export function add(a, b) { return a + b; } globalThis.test = { add };");
-    var result = _js.eval('test.add(4, 5)');
+  // void _runJS1() {
+  //   _js.loadModule("test",
+  //       "export function add(a, b) { return a + b; } globalThis.test = { add };");
+  //   var result = _js.eval('test.add(4, 5)');
 
-    printDebug(result);
+  //   printDebug(result);
 
-    setState(() {
-      _result = result.toString();
-    });
-  }
+  //   setState(() {
+  //     _result = result.toString();
+  //   });
+  // }
 
   Future<void> _runJS2() async {
-    var ajvIsLoaded = _js.eval("!(typeof ajv == 'undefined')");
-
-    if (ajvIsLoaded) {
-      return;
-    }
-
     String ajvJS = await rootBundle.loadString("assets/ajv.js");
     String test = await rootBundle.loadString("assets/test.js");
 
-    _js.eval("var window = global = globalThis; $ajvJS");
+    var ajvIsLoaded = _js.eval("!(typeof ajv == 'undefined')");
+
+    if (!ajvIsLoaded) {
+      _js.eval("var window = global = globalThis; $ajvJS");
+    }
 
     var result = _js.eval(test);
 
@@ -96,16 +94,16 @@ class _ExampleState extends State<Example> {
                   child: const Text('Run: 44 + 55'),
                 ),
                 SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: _runJS1,
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 40, vertical: 20),
-                    textStyle: const TextStyle(fontSize: 20),
-                  ),
-                  child: const Text('test.add(4, 5)'),
-                ),
-                SizedBox(height: 20),
+                // ElevatedButton(
+                //   onPressed: _runJS1,
+                //   style: ElevatedButton.styleFrom(
+                //     padding: const EdgeInsets.symmetric(
+                //         horizontal: 40, vertical: 20),
+                //     textStyle: const TextStyle(fontSize: 20),
+                //   ),
+                //   child: const Text('test.add(4, 5)'),
+                // ),
+                // SizedBox(height: 20),
                 ElevatedButton(
                   onPressed: _runJS2,
                   style: ElevatedButton.styleFrom(
@@ -113,7 +111,7 @@ class _ExampleState extends State<Example> {
                         horizontal: 40, vertical: 20),
                     textStyle: const TextStyle(fontSize: 20),
                   ),
-                  child: const Text('Ajv Error Info'),
+                  child: const Text('Ajv Result Info'),
                 ),
               ],
             ),

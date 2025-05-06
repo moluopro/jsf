@@ -34,6 +34,17 @@ class JsRuntime implements Runtime {
     return jsResult.dartify();
   }
 
+  void loadModule(String moduleName, String moduleSource) {
+    // ignore: avoid_print
+    print("JS module is not yet supported on the web platform.");
+
+    final transformedSource = moduleSource.replaceAllMapped(
+      RegExp(r'export\s+(function|const|let|var|class)\s+'),
+      (match) => '${match[1]} ',
+    );
+    eval(transformedSource);
+  }
+
   /// Executes a JavaScript initialization script.
   ///
   /// This is typically used to run global setup code in the JS environment, such as
