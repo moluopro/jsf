@@ -143,6 +143,14 @@ JSF为JavaScript中的常见数据类型提供了绑定：
 
 可以看到，这里成功调用了`Ajv.js`里的函数。
 
+### 集成测试
+
+集成测试位于`example/integration_test`文件夹，`cd example`后运行测试：
+
+`flutter drive --driver=integration_test/driver.dart --target=integration_test/js_runtime_test.dart -d linux`
+
+测试其他平台时，可以将`linux`换成相应的平台名称。
+
 
 ## 相关项目
 

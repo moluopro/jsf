@@ -143,6 +143,14 @@ Here, I’ll use [Ajv.js](https://ajv.js.org) as an example (the same example us
 
 As you can see, the function from `Ajv.js` was successfully called here.
 
+### Integration Tests
+
+The integration tests are located in the `example/integration_test`. After running `cd example`, execute the tests with the following command:
+
+`flutter drive --driver=integration_test/driver.dart --target=integration_test/js_runtime_test.dart -d linux`
+
+When testing on other platforms, you can replace `linux` with the corresponding platform name.
+
 
 ## Related Project
 
