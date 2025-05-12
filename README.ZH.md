@@ -154,6 +154,7 @@ JSF为JavaScript中的常见数据类型提供了绑定：
 
 ## 相关项目
 
+* [dynamic_widget](https://github.com/dengyin2000/dynamic_widget) 使用`JSF`作为脚本引擎进行热更新  
 * [json_dynamic_widget](https://pub.dev/packages/json_dynamic_widget) 使用`JSF`作为脚本引擎进行热更新([官方插件](https://pub.dev/packages/json_dynamic_widget_plugin_js))  
 
 

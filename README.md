@@ -154,7 +154,8 @@ When testing on other platforms, you can replace `linux` with the corresponding 
 
 ## Related Project
 
-* [json_dynamic_widget](https://pub.dev/packages/json_dynamic_widget) uses `JSF` as script for hot update (supported via [official plugin](https://pub.dev/packages/json_dynamic_widget_plugin_js))  
+* [dynamic_widget](https://github.com/dengyin2000/dynamic_widget) uses `JSF` as script for code push  
+* [json_dynamic_widget](https://pub.dev/packages/json_dynamic_widget) uses `JSF` as script (supported via [official plugin](https://pub.dev/packages/json_dynamic_widget_plugin_js))  
 
 
 ## FAQ
