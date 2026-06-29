@@ -1,173 +1,265 @@
-## JavaScript in Flutter
+# JSF
 
-[English](README.md) &nbsp;&nbsp;&nbsp; [中文](README.ZH.md)  
+[English](https://github.com/moluopro/jsf/blob/main/README.md) | [中文文档](https://github.com/moluopro/jsf/blob/main/README-ZH.md)
 
-A high performance JavaScript engine, available out of the box in Flutter.  
-
+A high-performance JavaScript engine available out of the box in Flutter.
 
 ## Features
 
-1. Simple and ready to use out of the box  
-2. Up-to-date support for the latest QuickJS  
-3. High-performance compilation strategy enabled by default  
-4. Advanced features such as `big number` support enabled by default  
-5. Full platform support, including web  
+1. Up-to-date `QuickJS` support.
+2. High-performance build strategy enabled by default.
+3. `big number` and related features enabled by default.
+4. Automatic type conversion with Dart and JavaScript interop.
+5. Full platform support, including `Web` and `OHOS`.
 
+![pic.png](pic.png)
 
-## Getting Started
-
-1. Add `jsf` as a [dependency](https://pub.dev/packages/jsf/install) in your `pubspec.yaml` file.  
-
-2. Just use it:  
+## Basic Usage
 
 ```dart
-class Example extends StatefulWidget {
-  const Example({super.key});
+import 'package:jsf/jsf.dart';
 
-  @override
-  State<Example> createState() => _ExampleState();
+final js = JsRuntime();
+print(js.eval('40 + 2')); // 42
+```
+
+## Runtime Options
+
+```dart
+final js = JsRuntime(
+  options: const JsRuntimeOptions(
+    memoryLimitBytes: 64 * 1024 * 1024,
+    maxStackSizeBytes: 1024 * 1024,
+    timeout: Duration(seconds: 2),
+  ),
+);
+```
+
+`timeout` is enforced by QuickJS' interrupt handler. Clear or replace it with:
+
+```dart
+js.clearTimeout();
+js.setTimeout(const Duration(milliseconds: 500));
+```
+
+## Values And Handles
+
+Use `eval()` when you want a Dart value. `eval()` executes JavaScript, converts the result to Dart, and releases the temporary JavaScript handle:
+
+```dart
+final data = js.eval('({id: 1n, tags: ["a", "b"]})');
+// {'id': BigInt.one, 'tags': ['a', 'b']}
+```
+
+Automatic conversion rules:
+
+| JavaScript | Dart |
+| --- | --- |
+| `undefined` | `jsUndefined` |
+| `null` | `null` |
+| `boolean` | `bool` |
+| integer number | `int` |
+| floating-point number | `double` |
+| `bigint` | `BigInt` |
+| `string` | `String` |
+| `Array` | `List<dynamic>` |
+| plain object | `Map<String, dynamic>` |
+| `Date` | `DateTime` |
+| `Map` / `Set` | `Map<Object?, Object?>` / `Set<Object?>` |
+| `RegExp` / `Error` | `JsRegExp` / `JsErrorDetails` |
+| `ArrayBuffer` / TypedArray | `Uint8List` / `JsTypedArray` |
+| `NaN` / `Infinity` / `-Infinity` | Dart special `double` values |
+
+Objects and arrays are converted recursively, so `id: 1n` becomes Dart `BigInt.one`, and `tags` becomes a Dart list. Sparse array holes become `jsArrayHole`. Passing Dart values into JS supports `null`, `jsUndefined`, `bool`, `int`, `double`, `String`, `BigInt`, `DateTime`, `Uint8List`, `JsRegExp`, `JsErrorDetails`, `JsTypedArray`, `Set`, `List`, and `Map<String, Object?>`.
+
+`eval()` is for one-shot results and does not preserve JavaScript object identity. Use `evalValue()` when you need a `JsValue` handle:
+
+- Calling JavaScript functions or object methods.
+- Reading or writing object properties or array indexes.
+- Awaiting an existing Promise.
+- Handling circular references, class instances, DOM/host objects, TypedArray/ArrayBuffer, or values that cannot reliably become plain Dart maps/lists.
+- Keeping the same JavaScript object identity across multiple calls.
+
+Use `evalValue()` when you need to keep a JavaScript object/function handle:
+
+```dart
+final object = js.evalValue('({count: 2, items: [3, 4]})');
+try {
+  final count = object.getPropertyValue('count');
+  try {
+    print(count.toDart()); // 2
+  } finally {
+    count.dispose();
+  }
+} finally {
+  object.dispose();
 }
+```
 
-class _ExampleState extends State<Example> {
-  String _result = '';
-  final _js = JsRuntime();
+`JsValue.toDart()` uses the same conversion rules as `eval()`. Circular objects cannot be converted automatically:
 
-  void _runJS() {
-    int result = _js.eval('44 + 55');
-    setState(() {
-      _result = result.toString();
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('JavaScript in Flutter')),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ElevatedButton(
-              onPressed: _runJS,
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 40,
-                  vertical: 20,
-                ),
-                textStyle: const TextStyle(fontSize: 20),
-              ),
-              child: const Text('Run: 44 + 55'),
-            ),
-            const SizedBox(height: 20),
-            Text('Get  $_result', style: const TextStyle(fontSize: 20)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  void dispose() {
-    _js.dispose();
-    super.dispose();
-  }
+```dart
+final circular = js.evalValue('const v = {}; v.self = v; v');
+try {
+  circular.toDart(); // throws JsException
+} finally {
+  circular.dispose();
 }
 ```
 
-Run `flutter run`, then you will see:  
+Owned `JsValue` handles must be disposed. Handles received inside `registerHandleFunction` are borrowed and only valid for the callback duration. Call `duplicate()` if you need to keep one.
 
-![jsf_pic](https://moluopro.atomgit.net/web/jsf/pic.png)  
-
-
-## Advanced Topics
-
-### Type Binding
-
-`JSF` provides bindings for common data types in `JavaScript`:
+## Calling JavaScript
 
 ```dart
-  final _js = JsRuntime();
-
-  var jsCode = [
-    '44 + 55',
-    '1.4 - 12',
-    'true',
-    'aaa',
-    'new Date().toString()',
-    '(123456789123456789123456789n * 2n)'
-  ];
-
-  for (int i = 0; i < jsCode.length; i++) {
-    var result = _js.eval(jsCode[i]);
-    print("$result: ${result.runtimeType}");
+final add = js.evalValue('(function(a, b) { return a + b; })');
+try {
+  final result = js.callValue(add, [20, 22]);
+  try {
+    print(result.toDart()); // 42
+  } finally {
+    result.dispose();
   }
-
-  // Output: 
-  // 99: int
-  // -10.6: double
-  // true: bool
-  // null: Null
-  // Tue May 06 2025 19:22:34 GMT+0800: String
-  // 246913578246913578246913578: BigInt
+} finally {
+  add.dispose();
+}
 ```
 
-In the example above, the type of `result` depends on the JavaScript code snippet being executed.
-
-### Big Number
-
-1. On the Native platform, the type of `bigint` is `_BigIntImpl`.
-2. On the Web platform, the type of `bigint` is `JavaScriptBigInt`.
-3. Both types implement the same interface, so there is virtually no difference in usage and no need to worry about the distinction.
-
-### Calling JS Libraries
-
-Here, I’ll use [Ajv.js](https://ajv.js.org) as an example (the same example used in `flutter_js`):
+For simple calls:
 
 ```dart
-  String ajvJS = await rootBundle.loadString("assets/ajv.js");
-  String test = await rootBundle.loadString("assets/test.js");
-
-  var ajvIsLoaded = _js.eval("!(typeof ajv == 'undefined')");
-
-  if (!ajvIsLoaded) {
-    _js.eval("var window = global = globalThis; $ajvJS");
-  }
-
-  var result = _js.eval(test);
-  print(result);
-
-  // Output(from Ajv.js)：
-  // data.id should be >= 0, data.email should match format "email", 
-  // data should have required property 'worker'
+js.execInitScript('function join(prefix, values) { return prefix + values.join(","); }');
+print(js.call('join', ['v:', [1, 2, 3]])); // v:1,2,3
 ```
 
-As you can see, the function from `Ajv.js` was successfully called here.
+## Calling Dart From JavaScript
 
-### Integration Tests
+Value callback:
 
-The integration tests are located in the `example/integration_test`. After running `cd example`, execute the tests with the following command:
+```dart
+js.registerFunction('dartSum', (args) {
+  return args.cast<num>().reduce((a, b) => a + b);
+});
 
-`flutter drive --driver=integration_test/driver.dart --target=integration_test/js_runtime_test.dart -d linux`
+print(js.eval('dartSum(4, 5, 6)')); // 15
+```
 
-When testing on other platforms, you can replace `linux` with the corresponding platform name.
+Callbacks may return `Future`; JavaScript receives a Promise:
 
+```dart
+js.registerFunction('loadUser', (args) async {
+  return {'id': 1, 'name': 'Ada'};
+});
 
-## Related Project
+final user = await js.evalAsync('loadUser().then((user) => user.name)');
+```
 
-* [dynamic_widget](https://github.com/dengyin2000/dynamic_widget) uses `JSF` as script for code push  
-* [json_dynamic_widget](https://pub.dev/packages/json_dynamic_widget) uses `JSF` as script (supported via [official plugin](https://pub.dev/packages/json_dynamic_widget_plugin_js))  
+Handle callback:
 
+```dart
+js.registerHandleFunction('readModel', (args) {
+  final model = args.first;
+  final count = model.getPropertyValue('count');
+  try {
+    return count.toDart();
+  } finally {
+    count.dispose();
+  }
+});
+```
 
-## FAQ
+## Promises
 
-1. Why did you create this package?  
-I was previously using the `flutter_js` package but often encountered build errors, and its `quickjs` version was very outdated. Although there were user reports suggesting that the author was working on improvements, no significant progress was observed. Additionally, I couldn't find any suitable alternatives on `pub.dev`, so I decided to develop one myself.  
+```dart
+final value = await js.evalAsync('Promise.resolve({ok: true})');
+print(value); // {'ok': true}
+```
 
-2. Which platforms are supported?  
-I have performed basic testing on all platforms supported by Flutter, and no issues have been identified so far.  
+You can also await an existing `JsValue`:
 
-3. What are the common reasons for build failures?  
-Please ensure your Flutter development environment is properly set up according to the [official documentation](https://docs.flutter.dev/get-started/install). For example, on Linux, make sure to [install the necessary packages](https://docs.flutter.dev/get-started/install/linux/desktop#development-tools), and on macOS, you need to [install Xcode and CocoaPods](https://docs.flutter.dev/get-started/install/macos/mobile-ios#development-tools).  
+```dart
+final promise = js.evalValue('Promise.resolve(42)');
+try {
+  print(await js.awaitValue(promise));
+} finally {
+  promise.dispose();
+}
+```
 
-4. Are there any plans for future updates?  
-The current functionality is sufficient for my personal use, so I do not plan to add new features. However, if you have other requirements, feel free to [submit an issue](https://github.com/moluopro/jsf/issues) to let me know.  
+## ES Modules
+
+Register modules in memory:
+
+```dart
+js.registerModules({
+  'math': 'export const answer = 42; export function inc(v) { return v + 1; }',
+  'consumer': 'import { answer, inc } from "math"; export const result = inc(answer);',
+  'pkg/relative': 'import { answer } from "../math"; export const result = answer;',
+});
+
+js.registerImportMap({'@math': 'math'});
+
+js.eval(
+  'import { result } from "consumer"; globalThis.result = result;',
+  filename: 'main',
+  module: true,
+);
+
+print(js.eval('result')); // 43
+print(await js.evalAsync('import("@math").then((m) => m.inc(m.answer))')); // 43
+```
+
+Register a Flutter asset as a module:
+
+```dart
+await js.registerModuleFromAsset('app/config', 'assets/config.js');
+```
+
+Native platforms use the QuickJS module loader. Web includes JSF's registry
+loader behind the same Dart API and supports in-memory modules, import maps,
+relative resolution, module caching, static `import`, named/default/namespace
+exports, re-exports, and literal dynamic `import("module")`.
+`evalAsync(..., module: true)` and dynamic `import()` on Web use the browser's
+native ES Module/Blob loader, so browser-supported ESM syntax works, including
+`export * from`, `export { x } from`, `export * as ns from`, and top-level
+await. The in-memory module loader is intended for application scripts and
+Flutter asset modules; it does not fetch network module URLs.
+
+## Errors
+
+JavaScript exceptions are thrown as `JsException`:
+
+```dart
+try {
+  js.eval('throw new Error("boom")');
+} on JsException catch (error) {
+  print(error.message);
+}
+```
+
+## Threading And Lifecycle
+
+- A `JsRuntime` owns one QuickJS runtime and one context.
+- Use a runtime from the same Dart isolate that created it.
+- Dispose every runtime with `dispose()`.
+- Dispose owned `JsValue` handles when you are done.
+- Do not use handles after their runtime is disposed.
+- Disposing a runtime also releases owned `JsValue` handles still registered under that runtime, but explicit `dispose()` remains recommended to control memory peaks.
+
+## Platform Notes
+
+- Native platforms use QuickJS through FFI.
+- Web uses the browser JavaScript runtime and supports `eval`, `evalValue`, `call`, `setGlobal`, `execInitScript`, Promises, value callbacks, handle-style access, and JSF registry ES Modules. Memory limits, stack limits, and synchronous eval timeouts are browser platform limits; web prints debug warnings and keeps business code running where possible.
+- iOS/macOS use CocoaPods source forwarding.
+- Windows ships a prebuilt `windows/jsf.dll`; ordinary users do not need a C/C++ toolchain.
+
+## Testing
+
+Integration tests live in `example/integration_test`:
+
+```bash
+cd example
+flutter drive --driver=integration_test/driver.dart --target=integration_test/js_runtime_test.dart -d macos
+```
+
+The test suite covers primitive conversion, BigInt, object/array conversion, handle calls, Dart callbacks, promise waiting, module loading, exceptions, timeouts, Unicode, typed arrays, circular objects, and multiple runtimes.
