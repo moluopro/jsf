@@ -14,7 +14,7 @@ A high-performance JavaScript engine available out of the box in Flutter.
 
 ![pic.png](pic.png)
 
-## Basic Usage
+## Quick Start
 
 ```dart
 import 'package:jsf/jsf.dart';
@@ -23,7 +23,7 @@ final js = JsRuntime();
 print(js.eval('40 + 2')); // 42
 ```
 
-## Runtime Options
+## Runtime Configuration
 
 ```dart
 final js = JsRuntime(
@@ -42,7 +42,7 @@ js.clearTimeout();
 js.setTimeout(const Duration(milliseconds: 500));
 ```
 
-## Values And Handles
+## Values and Handles
 
 Use `eval()` when you want a Dart value. `eval()` executes JavaScript, converts the result to Dart, and releases the temporary JavaScript handle:
 
@@ -109,7 +109,7 @@ try {
 
 Owned `JsValue` handles must be disposed. Handles received inside `registerHandleFunction` are borrowed and only valid for the callback duration. Call `duplicate()` if you need to keep one.
 
-## Calling JavaScript
+## Dart Calls JavaScript
 
 ```dart
 final add = js.evalValue('(function(a, b) { return a + b; })');
@@ -132,7 +132,7 @@ js.execInitScript('function join(prefix, values) { return prefix + values.join("
 print(js.call('join', ['v:', [1, 2, 3]])); // v:1,2,3
 ```
 
-## Calling Dart From JavaScript
+## JavaScript Calls Dart
 
 Use `registerFunction()` to expose a Dart function on the JavaScript global
 object. JavaScript calls it like a normal function. Arguments are converted to
@@ -206,7 +206,7 @@ Arguments received by `registerHandleFunction()` are borrowed handles and are
 only valid for the callback duration. Call `duplicate()` if you need to keep one
 outside the callback, and dispose the owned handle when finished.
 
-## Promises
+## Promise
 
 When JavaScript returns a Promise, `evalAsync()` gives you the resolved Dart
 value:
@@ -293,7 +293,7 @@ native ES Module/Blob loader, so browser-supported ESM syntax works, including
 await. The in-memory module loader is intended for application scripts and
 Flutter asset modules; it does not fetch network module URLs.
 
-## Errors
+## Exceptions
 
 JavaScript exceptions are thrown as `JsException`:
 
@@ -305,7 +305,7 @@ try {
 }
 ```
 
-## Threading And Lifecycle
+## Threading and Lifecycle
 
 - A `JsRuntime` owns one QuickJS runtime and one context.
 - Use a runtime from the same Dart isolate that created it.
@@ -313,13 +313,6 @@ try {
 - Dispose owned `JsValue` handles when you are done.
 - Do not use handles after their runtime is disposed.
 - Disposing a runtime also releases owned `JsValue` handles still registered under that runtime, but explicit `dispose()` remains recommended to control memory peaks.
-
-## Platform Notes
-
-- Native platforms use QuickJS through FFI.
-- Web uses the browser JavaScript runtime and supports `eval`, `evalValue`, `call`, `setGlobal`, `execInitScript`, Promises, value callbacks, handle-style access, and JSF registry ES Modules. Memory limits, stack limits, and synchronous eval timeouts are browser platform limits; web prints debug warnings and keeps business code running where possible.
-- iOS/macOS use CocoaPods source forwarding.
-- Windows ships a prebuilt `windows/jsf.dll`; ordinary users do not need a C/C++ toolchain.
 
 ## Testing
 
