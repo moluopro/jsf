@@ -1,6 +1,6 @@
 name: jsf
 description: "A high performance JavaScript engine, available out of the box in Flutter."
-version: 0.6.1
+version: 1.0.0
 homepage: https://github.com/moluopro/jsf
 
 platforms:
@@ -18,10 +18,11 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
   ffi: ^2.1.3
 
 dev_dependencies:
-  ffigen: ^13.0.0
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
@@ -46,5 +47,10 @@ flutter:
         ffiPlugin: true
       macos:
         ffiPlugin: true
+      ohos:
+        ffiPlugin: true
       windows:
         ffiPlugin: true
+      web:
+        pluginClass: JsfWeb
+        fileName: jsf_web.dart
