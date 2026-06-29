@@ -1,3 +1,24 @@
+## 1.0.0
+
+* Added `OpenHarmony` platform support.
+* Breaking: replaced direct QuickJS Dart bindings with a stable `JSF_*` native ABI.
+* Added `JsValue` handles for object, array, function, promise, property, and index interop.
+* Added Dart-to-JS and JS-to-Dart callback support, including handle callbacks.
+* Added Promise bridge with `evalAsync` and `awaitValue`.
+* Added Dart `Future` to JavaScript `Promise` bridging for Dart callbacks.
+* Added in-memory ES module registry with static `import` and dynamic `import()`.
+* Added module import maps and relative module normalization for native builds.
+* Added a Web ES Module registry loader with native browser Blob module execution for async module evaluation and dynamic imports.
+* Added runtime options for memory limit, max stack size, and timeout.
+* Added structured transfer conversion for `undefined`, array holes, `Date`,
+  `Map`, `Set`, `RegExp`, `Error`, `NaN`, infinities, `ArrayBuffer`, and
+  TypedArray values.
+* Added runtime-owned handle tracking so disposing a runtime releases remaining
+  owned `JsValue` handles.
+* Added release native optimization flags, LTO, and native CPU tuning.
+* Reworked iOS/macOS CocoaPods source forwarding.
+* Expanded integration tests for conversion, handles, callbacks, promises, modules, exceptions, timeouts, Unicode, typed arrays, circular objects, and multiple runtimes.
+
 ## 0.6.1
 
 * added support for importing JS packages
