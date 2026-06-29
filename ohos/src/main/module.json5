@@ -1,0 +1,11 @@
+{
+  "module": {
+    "name": "jsf",
+    "type": "har",
+    "deviceTypes": [
+      "phone",
+      "tablet",
+      "2in1",
+    ]
+  }
+}
