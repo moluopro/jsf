@@ -9,7 +9,7 @@ Pod::Spec.new do |s|
   quickjs_version = File.read(File.join(__dir__, '../src/quickjs/VERSION')).strip
 
   s.name             = 'jsf'
-  s.version          = '1.0.0'
+  s.version          = '1.0.1'
   s.summary          = 'A high performance JavaScript engine.'
   s.description      = <<-DESC
 A high performance JavaScript engine, available out of the box in Flutter.
