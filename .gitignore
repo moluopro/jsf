@@ -21,7 +21,7 @@ migrate_working_dir/
 # The .vscode folder contains launch configuration and tasks you configure in
 # VS Code which you may wish to be included in version control, so this line
 # is commented out by default.
-#.vscode/
+.vscode/
 
 # Flutter/Dart/Pub related
 # Libraries should not include pubspec.lock, per https://dart.dev/guides/libraries/private-files#pubspeclock.
@@ -31,3 +31,22 @@ migrate_working_dir/
 .flutter-plugins
 .flutter-plugins-dependencies
 build/
+FORME/
+
+# HarmonyOS / OHOS generated files
+**/ohos/local.properties
+**/ohos/node_modules/
+**/ohos/oh_modules/
+**/ohos/.hvigor/
+**/ohos/.preview/
+**/ohos/.cxx/
+**/ohos/.test/
+**/ohos/package.json
+**/ohos/package-lock.json
+**/ohos/oh-package-lock.json5
+**/ohos/**/BuildProfile.ets
+**/ohos/**/build/
+**/ohos/**/src/main/resources/rawfile/flutter_assets/
+**/ohos/**/libs/**/libapp.so
+**/ohos/**/libs/**/libflutter.so
+**/ohos/**/libs/**/libvmservice_snapshot.so
