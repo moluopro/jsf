@@ -1,31 +1,29 @@
 # Copyright (C) 2025 moluopro. All rights reserved.
 # Github: https://github.com/moluopro
 
-# The Flutter tooling requires that developers have a version of Visual Studio
-# installed that includes CMake 3.14 or later. You should not increase this
-# version, as doing so will cause the plugin to fail to compile for some
-# customers of the plugin.
+# Flutter Windows plugins are configured through CMake. JSF ships a
+# prebuilt Windows DLL so users do not need a local C compiler.
 cmake_minimum_required(VERSION 3.14)
 
-# Project-level configuration.
 set(PROJECT_NAME "jsf")
-project(${PROJECT_NAME} LANGUAGES CXX)
+project(${PROJECT_NAME} LANGUAGES NONE)
 
-# Invoke the build for native code shared with the other target platforms.
-# This can be changed to accommodate different builds.
-# add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../src" "${CMAKE_CURRENT_BINARY_DIR}/shared")
+set(JSF_PREBUILT_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/jsf.dll")
 
-# List of absolute paths to libraries that should be bundled with the plugin.
-# This list could contain prebuilt libraries, or libraries created by an
-# external build triggered from this build file.
-# set(jsf_bundled_libraries
-#   # Defined in ../src/CMakeLists.txt.
-#   # This can be changed to accommodate different builds.
-#   $<TARGET_FILE:jsf>
-#   PARENT_SCOPE
-# )
+if(NOT EXISTS "${JSF_PREBUILT_LIBRARY}")
+  message(FATAL_ERROR
+    "Missing windows/jsf.dll. Reinstall the package or restore the prebuilt "
+    "Windows library."
+  )
+endif()
 
 set(jsf_bundled_libraries
-  "${CMAKE_CURRENT_SOURCE_DIR}/jsf.dll"
-  PARENT_SCOPE
+  "${JSF_PREBUILT_LIBRARY}"
 )
+
+if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  set(jsf_bundled_libraries
+    ${jsf_bundled_libraries}
+    PARENT_SCOPE
+  )
+endif()
