@@ -32,7 +32,7 @@ class _ExampleState extends State<Example> {
       '44 + 55',
       '1.4 - 12',
       'true',
-      'aaa',
+      '"aaa"',
       'new Date().toString()',
       '(123456789123456789123456789n * 2n)',
       '(123456789123456789123456789n * 2n).toString()'
@@ -53,18 +53,6 @@ class _ExampleState extends State<Example> {
       _result = results[0].toString();
     });
   }
-
-  // void _runJS1() {
-  //   _js.loadModule("test",
-  //       "export function add(a, b) { return a + b; } globalThis.test = { add };");
-  //   var result = _js.eval('test.add(4, 5)');
-
-  //   printDebug(result);
-
-  //   setState(() {
-  //     _result = result.toString();
-  //   });
-  // }
 
   Future<void> _runJS2() async {
     String ajvJS = await rootBundle.loadString("assets/ajv.js");
@@ -103,16 +91,6 @@ class _ExampleState extends State<Example> {
                   child: const Text('Run: 44 + 55'),
                 ),
                 SizedBox(height: 20),
-                // ElevatedButton(
-                //   onPressed: _runJS1,
-                //   style: ElevatedButton.styleFrom(
-                //     padding: const EdgeInsets.symmetric(
-                //         horizontal: 40, vertical: 20),
-                //     textStyle: const TextStyle(fontSize: 20),
-                //   ),
-                //   child: const Text('test.add(4, 5)'),
-                // ),
-                // SizedBox(height: 20),
                 ElevatedButton(
                   onPressed: _runJS2,
                   style: ElevatedButton.styleFrom(
