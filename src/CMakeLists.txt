@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(jsf_library VERSION 1.0.0 LANGUAGES C)
+project(jsf_library VERSION 1.0.1 LANGUAGES C)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
