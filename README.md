@@ -134,7 +134,9 @@ print(js.call('join', ['v:', [1, 2, 3]])); // v:1,2,3
 
 ## Calling Dart From JavaScript
 
-Value callback:
+Use `registerFunction()` to expose a Dart function on the JavaScript global
+object. JavaScript calls it like a normal function. Arguments are converted to
+Dart values, and the return value is converted back to JavaScript:
 
 ```dart
 js.registerFunction('dartSum', (args) {
@@ -144,7 +146,24 @@ js.registerFunction('dartSum', (args) {
 print(js.eval('dartSum(4, 5, 6)')); // 15
 ```
 
-Callbacks may return `Future`; JavaScript receives a Promise:
+Callbacks can receive multiple arguments and return convertible values such as
+`Map`, `List`, `BigInt`, and `DateTime`:
+
+```dart
+js.registerFunction('receiveMessage', (args) {
+  final name = args[0] as String;
+  final payload = args[1] as Map;
+  return {
+    'ok': true,
+    'message': '$name:${payload['count']}',
+  };
+});
+
+print(js.eval('receiveMessage("counter", {count: 3}).message')); // counter:3
+```
+
+Callbacks may return `Future`; JavaScript receives a Promise, so JS can use
+`await` or `.then()` directly:
 
 ```dart
 js.registerFunction('loadUser', (args) async {
@@ -154,7 +173,22 @@ js.registerFunction('loadUser', (args) async {
 final user = await js.evalAsync('loadUser().then((user) => user.name)');
 ```
 
-Handle callback:
+With JavaScript `async/await`:
+
+```dart
+final name = await js.evalAsync('''
+  (async () => {
+    const user = await loadUser();
+    return user.name;
+  })()
+''');
+print(name); // Ada
+```
+
+`registerFunction()` converts JavaScript objects into Dart snapshots. Use
+`registerHandleFunction()` when you need to preserve JavaScript object identity
+or work with functions, class instances, circular objects, or host objects. It
+passes arguments to Dart as `JsValue` handles:
 
 ```dart
 js.registerHandleFunction('readModel', (args) {
@@ -168,11 +202,31 @@ js.registerHandleFunction('readModel', (args) {
 });
 ```
 
+Arguments received by `registerHandleFunction()` are borrowed handles and are
+only valid for the callback duration. Call `duplicate()` if you need to keep one
+outside the callback, and dispose the owned handle when finished.
+
 ## Promises
+
+When JavaScript returns a Promise, `evalAsync()` gives you the resolved Dart
+value:
 
 ```dart
 final value = await js.evalAsync('Promise.resolve({ok: true})');
 print(value); // {'ok': true}
+```
+
+`evalAsync()` is also the normal way to call `async function`:
+
+```dart
+final result = await js.evalAsync('''
+  async function compute() {
+    const value = await Promise.resolve(21);
+    return value * 2;
+  }
+  compute()
+''');
+print(result); // 42
 ```
 
 You can also await an existing `JsValue`:
@@ -184,6 +238,20 @@ try {
 } finally {
   promise.dispose();
 }
+```
+
+Dart `Future` values returned to JavaScript become Promises. This works for
+both `registerFunction()` and `registerHandleFunction()`:
+
+```dart
+js.registerFunction('readConfig', (args) async {
+  return {'theme': 'dark'};
+});
+
+final theme = await js.evalAsync('''
+  readConfig().then((config) => config.theme)
+''');
+print(theme); // dark
 ```
 
 ## ES Modules
