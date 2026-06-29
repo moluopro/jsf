@@ -6,8 +6,10 @@
 # Run `pod lib lint jsf.podspec` to validate before publishing.
 #
 Pod::Spec.new do |s|
+  quickjs_version = File.read(File.join(__dir__, '../src/quickjs/VERSION')).strip
+
   s.name             = 'jsf'
-  s.version          = '0.6.1'
+  s.version          = '1.0.0'
   s.summary          = 'A high performance JavaScript engine.'
   s.description      = <<-DESC
 A high performance JavaScript engine, available out of the box in Flutter.
@@ -16,22 +18,22 @@ A high performance JavaScript engine, available out of the box in Flutter.
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'moluopro' => 'moluopro@gmail.com' }
 
-  system("rm -rf Classes/*")
-  system("cp -r ../src/*.c Classes/")
-  system("cp -r ../src/*.h Classes/")
-
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
-    'GCC_OPTIMIZATION_LEVEL' => '3',
-    'OTHER_CFLAGS' => '-O3 -march=native -flto -fno-plt -DCONFIG_BIGNUM'
+    'GCC_PREPROCESSOR_DEFINITIONS' => "_GNU_SOURCE=1 CONFIG_VERSION=\\\"#{quickjs_version}\\\"",
+    'HEADER_SEARCH_PATHS' => '$(PODS_TARGET_SRCROOT)/../src $(PODS_TARGET_SRCROOT)/../src/quickjs',
+    'OTHER_CFLAGS' => '-fwrapv -Wno-shorten-64-to-32 -Wno-conditional-uninitialized -Wno-comma'
   }
 
-  # This will ensure the source files in Classes/ are included in the native
-  # builds of apps using this FFI plugin. Podspec does not support relative
-  # paths, so Classes contains a forwarder C file that relatively imports
-  # `../src/*` so that the C sources can be shared among all target platforms.
   s.source           = { :path => '.' }
-  s.source_files = 'Classes/**/*'
+  s.source_files = [
+    'Classes/jsf.c',
+    'Classes/quickjs/cutils.c',
+    'Classes/quickjs/dtoa.c',
+    'Classes/quickjs/libregexp.c',
+    'Classes/quickjs/libunicode.c',
+    'Classes/quickjs/quickjs.c'
+  ]
 
   # If your plugin requires a privacy manifest, for example if it collects user
   # data, update the PrivacyInfo.xcprivacy file to describe your plugin's
@@ -42,6 +44,5 @@ A high performance JavaScript engine, available out of the box in Flutter.
   s.dependency 'FlutterMacOS'
 
   s.platform = :osx, '10.11'
-  s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.swift_version = '5.0'
 end
