@@ -1,3 +1,7 @@
+## 1.0.1
+
+* 修复 Web 平台兼容性识别：`js_interop` 和浏览器条件导出都会路由到 Web runtime 实现。
+
 ## 1.0.0
 
 * 新增`OpenHarmony`平台的支持。
