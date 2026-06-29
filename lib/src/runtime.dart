@@ -10,7 +10,13 @@ abstract class Runtime {
   ///
   /// Implementations should provide logic to execute the code in the
   /// appropriate context and convert the result into a Dart-compatible value.
-  dynamic eval(String code);
+  dynamic eval(String code, {String filename = '<eval>', bool module = false});
+
+  /// Calls a JavaScript function expression with Dart values converted to JS.
+  dynamic call(String functionRef, [List<Object?> arguments = const []]);
+
+  /// Assigns a Dart value to `globalThis[name]` in the JavaScript context.
+  void setGlobal(String name, Object? value);
 
   /// Executes a JavaScript initialization script.
   ///
