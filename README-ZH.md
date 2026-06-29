@@ -134,7 +134,7 @@ print(js.call('join', ['v:', [1, 2, 3]])); // v:1,2,3
 
 ## JS 调 Dart
 
-普通值回调：
+使用 `registerFunction()` 可以把 Dart 函数注册到 JS 全局对象。JS 侧调用方式和普通 JavaScript 函数一致，参数会自动转换成 Dart 值，返回值也会自动转换回 JS：
 
 ```dart
 js.registerFunction('dartSum', (args) {
@@ -144,7 +144,22 @@ js.registerFunction('dartSum', (args) {
 print(js.eval('dartSum(4, 5, 6)')); // 15
 ```
 
-回调可以返回 `Future`，JS 侧会收到 Promise：
+回调可以接收多个参数，也可以返回 `Map`、`List`、`BigInt`、`DateTime` 等可转换值：
+
+```dart
+js.registerFunction('receiveMessage', (args) {
+  final name = args[0] as String;
+  final payload = args[1] as Map;
+  return {
+    'ok': true,
+    'message': '$name:${payload['count']}',
+  };
+});
+
+print(js.eval('receiveMessage("counter", {count: 3}).message')); // counter:3
+```
+
+Dart 回调可以返回 `Future`，JS 侧会收到 Promise，所以可以在 JS 中直接 `await` 或 `.then()`：
 
 ```dart
 js.registerFunction('loadUser', (args) async {
@@ -154,7 +169,19 @@ js.registerFunction('loadUser', (args) async {
 final user = await js.evalAsync('loadUser().then((user) => user.name)');
 ```
 
-句柄回调：
+如果 JS 侧使用 `async/await`：
+
+```dart
+final name = await js.evalAsync('''
+  (async () => {
+    const user = await loadUser();
+    return user.name;
+  })()
+''');
+print(name); // Ada
+```
+
+使用 `registerFunction()` 时，JS 对象会按转换规则变成 Dart snapshot。如果需要保留 JS 对象身份、访问函数、类实例、循环对象或宿主对象，使用 `registerHandleFunction()`。它会把参数作为 `JsValue` handle 传给 Dart：
 
 ```dart
 js.registerHandleFunction('readModel', (args) {
@@ -168,11 +195,28 @@ js.registerHandleFunction('readModel', (args) {
 });
 ```
 
+`registerHandleFunction()` 中收到的参数是 borrowed handle，只在回调期间有效。需要保存到回调外时，调用 `duplicate()` 获取 owned handle，并在使用完后 `dispose()`。
+
 ## Promise
+
+JS 返回 Promise 时，使用 `evalAsync()` 可以直接得到 Dart `Future` 的结果：
 
 ```dart
 final value = await js.evalAsync('Promise.resolve({ok: true})');
 print(value); // {'ok': true}
+```
+
+`evalAsync()` 也适合调用 `async function`：
+
+```dart
+final result = await js.evalAsync('''
+  async function compute() {
+    const value = await Promise.resolve(21);
+    return value * 2;
+  }
+  compute()
+''');
+print(result); // 42
 ```
 
 也可以等待已有句柄：
@@ -184,6 +228,19 @@ try {
 } finally {
   promise.dispose();
 }
+```
+
+Dart `Future` 返回给 JS 时会变成 Promise。这个能力适用于 `registerFunction()` 和 `registerHandleFunction()`：
+
+```dart
+js.registerFunction('readConfig', (args) async {
+  return {'theme': 'dark'};
+});
+
+final theme = await js.evalAsync('''
+  readConfig().then((config) => config.theme)
+''');
+print(theme); // dark
 ```
 
 ## ES Modules
