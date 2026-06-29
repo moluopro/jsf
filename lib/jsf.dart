@@ -12,9 +12,12 @@
 library;
 
 export 'src/runtime_ffi.dart'
-    if (dart.library.js_interop) 'src/runtime_web.dart';
+    if (dart.library.js_interop) 'src/runtime_web.dart'
+    if (dart.library.html) 'src/runtime_web.dart';
 export 'src/exception.dart';
 export 'src/conversion.dart';
 export 'src/runtime.dart';
 export 'src/runtime_options.dart';
-export 'src/value.dart' if (dart.library.js_interop) 'src/value_web.dart';
+export 'src/value.dart'
+    if (dart.library.js_interop) 'src/value_web.dart'
+    if (dart.library.html) 'src/value_web.dart';
