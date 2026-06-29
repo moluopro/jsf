@@ -1,3 +1,8 @@
+## 1.0.1
+
+* Fixed Web platform compatibility detection by routing both JS interop and
+  browser conditional exports to the Web runtime implementation.
+
 ## 1.0.0
 
 * Added `OpenHarmony` platform support.
