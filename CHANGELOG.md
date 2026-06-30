@@ -1,3 +1,13 @@
+## 1.1.0
+
+* Migrated iOS and macOS platforms to Swift Package Manager.
+* Fixed Web module import-map resolution so relative specifiers are normalized
+  against the referrer before aliases are applied, matching native behavior.
+* Stopped applying aliases during Web module registration to avoid native/Web
+  differences between registered names and import resolution.
+* Improved the example widget test by injecting the runtime, so ordinary Flutter
+  widget tests do not load the native dynamic library directly.
+
 ## 1.0.1
 
 * Fixed Web platform compatibility detection by routing both JS interop and

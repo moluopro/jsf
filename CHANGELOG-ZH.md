@@ -1,3 +1,10 @@
+## 1.1.0
+
+* 迁移 iOS 和 macOS 平台为 Swift Package Manager。
+* 修复 Web 模块 import map 解析顺序：相对路径会先基于 referrer 规范化，再应用 alias，与 native 行为一致。
+* Web 模块注册不再应用 alias，避免注册名和导入解析在 native/Web 之间出现差异。
+* 改进 example widget test，通过注入 runtime 避免普通 Flutter widget test 直接加载原生动态库。
+
 ## 1.0.1
 
 * 修复 Web 平台兼容性识别：`js_interop` 和浏览器条件导出都会路由到 Web runtime 实现。
