@@ -25,8 +25,15 @@ void main() {
             'export const result = math.inc(math.answer);',
         'pkg/dynamic': 'export function loadRelative() { '
             'return import("./math").then((m) => m.relativeAnswer); }',
+        'pkg/uses-relative-alias':
+            'import { aliasValue } from "./alias-target"; '
+                'export const result = aliasValue + 1;',
+        'shared/alias-target': 'export const aliasValue = 80;',
       });
-      js.registerImportMap({'mapped-math': 'math'});
+      js.registerImportMap({
+        'mapped-math': 'math',
+        'pkg/alias-target': 'shared/alias-target',
+      });
 
       js.eval(
         'import { result } from "consumer"; '
@@ -57,6 +64,12 @@ void main() {
           'import("pkg/dynamic").then((m) => m.loadRelative())',
         ),
         50,
+      );
+      expect(
+        await js.evalAsync(
+          'import("pkg/uses-relative-alias").then((m) => m.result)',
+        ),
+        81,
       );
       expect(
         await js.evalAsync(

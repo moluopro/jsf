@@ -219,14 +219,17 @@ function dirname(name){
   const index=name.lastIndexOf('/');
   return index<0?'':name.slice(0,index);
 }
-function resolveModule(r,specifier,referrer){
+function normalizeModuleSpecifier(specifier,referrer){
   let spec=String(specifier);
-  if(r.aliases.has(spec))spec=r.aliases.get(spec);
   if(spec.startsWith('.')){
     const base=dirname(referrer);
     spec=base?base+'/'+spec:spec;
   }
   return normalizePath(spec);
+}
+function resolveModule(r,specifier,referrer){
+  const normalized=normalizeModuleSpecifier(specifier,referrer);
+  return r.aliases.has(normalized)?r.aliases.get(normalized):normalized;
 }
 function splitTopLevel(text){
   const parts=[];
@@ -414,7 +417,7 @@ globalThis.__jsfModuleLoad=function(runtimeId,moduleName){
 };
 globalThis.__jsfModuleRegister=function(runtimeId,moduleName,moduleSource){
   const r=moduleRegistry(runtimeId);
-  const name=resolveModule(r,moduleName,'');
+  const name=normalizeModuleSpecifier(moduleName,'');
   r.modules.set(name,String(moduleSource));
   r.cache.clear();
   revokeNativeUrls(r);
