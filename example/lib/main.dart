@@ -7,17 +7,29 @@ void main() {
   runApp(const MyApp());
 }
 
+typedef RuntimeFactory = Runtime Function();
+
+Runtime _createRuntime() => JsRuntime();
+
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  const MyApp({super.key, RuntimeFactory? runtimeFactory})
+      : _runtimeFactory = runtimeFactory;
+
+  final RuntimeFactory? _runtimeFactory;
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(home: Example());
+    return MaterialApp(
+      theme: ThemeData(splashFactory: InkRipple.splashFactory),
+      home: Example(runtimeFactory: _runtimeFactory ?? _createRuntime),
+    );
   }
 }
 
 class Example extends StatefulWidget {
-  const Example({super.key});
+  const Example({super.key, required this.runtimeFactory});
+
+  final RuntimeFactory runtimeFactory;
 
   @override
   State<Example> createState() => _ExampleState();
@@ -25,7 +37,9 @@ class Example extends StatefulWidget {
 
 class _ExampleState extends State<Example> {
   String _result = '';
-  final _js = JsRuntime();
+  Runtime? _js;
+
+  Runtime get _runtime => _js ??= widget.runtimeFactory();
 
   void _runJS() {
     var jsCode = [
@@ -41,7 +55,7 @@ class _ExampleState extends State<Example> {
     var results = [];
 
     for (int i = 0; i < jsCode.length; i++) {
-      var result = _js.eval(jsCode[i]);
+      var result = _runtime.eval(jsCode[i]);
       results.add(result);
     }
 
@@ -58,13 +72,13 @@ class _ExampleState extends State<Example> {
     String ajvJS = await rootBundle.loadString("assets/ajv.js");
     String test = await rootBundle.loadString("assets/test.js");
 
-    var ajvIsLoaded = _js.eval("!(typeof ajv == 'undefined')");
+    var ajvIsLoaded = _runtime.eval("!(typeof ajv == 'undefined')");
 
     if (!ajvIsLoaded) {
-      _js.eval("var window = global = globalThis; $ajvJS");
+      _runtime.eval("var window = global = globalThis; $ajvJS");
     }
 
-    var result = _js.eval(test);
+    var result = _runtime.eval(test);
 
     setState(() {
       _result = result.toString();
@@ -119,7 +133,7 @@ class _ExampleState extends State<Example> {
 
   @override
   void dispose() {
-    _js.dispose();
+    _js?.dispose();
     super.dispose();
   }
 }
