@@ -1,3 +1,12 @@
+## 1.2.0
+
+* Add callback revocation, handle scopes, and runtime diagnostics.
+* Improve Web runtime isolation and ES module support.
+* Improve Unicode, BigInt, and binary data conversion and performance.
+* Fix Apple library loading, lost callback errors, execution timeouts, and runtime disposal issues.
+* Add native Fetch with streaming uploads/downloads, FormData, Blob/File, cancellation, and timeouts.
+* Add timers, URL, AbortSignal, and background execution with `JsWorker`.
+
 ## 1.1.0
 
 * Migrated iOS and macOS platforms to Swift Package Manager.

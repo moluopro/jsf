@@ -1,3 +1,12 @@
+## 1.2.0
+
+* 新增回调注销、句柄作用域和运行时诊断。
+* 完善 Web 多实例隔离与 ES Modules 支持。
+* 完善 Unicode、BigInt 和二进制数据转换，提高转换性能。
+* 修复 Apple 平台加载失败、回调异常丢失、执行超时及运行时释放问题。
+* 新增原生 Fetch，支持流式上传/下载、FormData、Blob/File、取消和超时控制。
+* 新增定时器、URL、AbortSignal 和 `JsWorker` 后台执行。
+
 ## 1.1.0
 
 * 迁移 iOS 和 macOS 平台为 Swift Package Manager。
