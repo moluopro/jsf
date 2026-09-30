@@ -104,7 +104,7 @@ class _ExampleState extends State<Example> {
                   ),
                   child: const Text('Run: 44 + 55'),
                 ),
-                SizedBox(height: 20),
+                const SizedBox(height: 20),
                 ElevatedButton(
                   onPressed: _runJS2,
                   style: ElevatedButton.styleFrom(
