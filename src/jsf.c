@@ -5,6 +5,7 @@
 
 #include "quickjs.h"
 #include "jsf.h"
+#include <time.h>
 
 typedef struct JSFDartCallbackEntry
 {
@@ -20,6 +21,7 @@ typedef struct JSFModuleEntry
 {
     char *name;
     char *source;
+    size_t source_len;
     struct JSFModuleEntry *next;
 } JSFModuleEntry;
 
@@ -37,12 +39,30 @@ typedef struct JSFDartFutureEntry
     struct JSFDartFutureEntry *next;
 } JSFDartFutureEntry;
 
+typedef struct JSFRejection {
+    JSValue promise;
+    JSValue reason;
+    struct JSFRejection *next;
+} JSFRejection;
+
 struct JSFRuntime
 {
     JSRuntime *runtime;
     JSContext *context;
     char *last_error;
+    char *last_error_json;
     int64_t deadline_ms;
+    int32_t timeout_ms;
+    uint32_t execution_depth;
+    JSValue stringify_fn;
+    JSValue revive_fn;
+    JSFRejection *rejections;
+    int rejection_tracking;
+    int32_t rejection_count;
+    int64_t live_values;
+    JSFValue *deferred_values;
+    int callbacks_need_cleanup;
+    JSClassID array_buffer_class;
     int32_t next_callback_id;
     JSFDartCallbackEntry *callbacks;
     JSFModuleEntry *modules;
@@ -54,6 +74,9 @@ struct JSFValue
 {
     JSFRuntime *owner;
     JSValue value;
+    int throw_on_return;
+    int pending_free;
+    JSFValue *next_deferred;
 };
 
 static int64_t jsf_now_ms(void)
@@ -61,9 +84,9 @@ static int64_t jsf_now_ms(void)
 #if _WIN32
     return (int64_t)GetTickCount64();
 #else
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return ((int64_t)tv.tv_sec * 1000) + ((int64_t)tv.tv_usec / 1000);
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ((int64_t)ts.tv_sec * 1000) + ((int64_t)ts.tv_nsec / 1000000);
 #endif
 }
 
@@ -79,13 +102,63 @@ static char *jsf_strdup(const char *value)
     return copy;
 }
 
+static char *jsf_strndup(const char *value, size_t length)
+{
+    if (length == SIZE_MAX) return NULL;
+    char *copy = malloc(length + 1);
+    if (copy) { memcpy(copy, value, length); copy[length] = 0; }
+    return copy;
+}
+
 static void jsf_set_last_error(JSFRuntime *runtime, const char *message)
 {
     if (!runtime)
         return;
+    free(runtime->last_error_json);
+    runtime->last_error_json = NULL;
     free(runtime->last_error);
     runtime->last_error = jsf_strdup(message ? message : "Unknown JavaScript error");
 }
+
+/* All execution-capable ABI calls share the outermost call's budget. */
+static void jsf_begin_execution(JSFRuntime *runtime)
+{
+    if (runtime && runtime->execution_depth++ == 0) {
+        JS_UpdateStackTop(runtime->runtime);
+        runtime->deadline_ms = runtime->timeout_ms > 0 ? jsf_now_ms() + runtime->timeout_ms : 0;
+    }
+}
+
+static void jsf_end_execution(JSFRuntime *runtime)
+{
+    if (runtime && --runtime->execution_depth == 0) {
+        runtime->deadline_ms = 0;
+        while (runtime->deferred_values) {
+            JSFValue *value = runtime->deferred_values;
+            runtime->deferred_values = value->next_deferred;
+            JS_FreeValue(runtime->context, value->value);
+            runtime->live_values--;
+            free(value);
+        }
+        JSFDartCallbackEntry **cursor = &runtime->callbacks;
+        while (runtime->callbacks_need_cleanup && *cursor) {
+            JSFDartCallbackEntry *entry = *cursor;
+            if (!entry->callback && !entry->handle_callback) { *cursor=entry->next; free(entry); }
+            else cursor=&entry->next;
+        }
+        runtime->callbacks_need_cleanup = 0;
+    }
+}
+
+static int jsf_check_owner(JSFRuntime *runtime, JSFValue *value)
+{
+    if (runtime && value && value->owner == runtime) return 1;
+    jsf_set_last_error(runtime, "JavaScript value belongs to a different runtime");
+    return 0;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_ABIVersion(void) { return 2; }
+FFI_PLUGIN_EXPORT const char *JSF_EngineVersion(void) { return CONFIG_VERSION; }
 
 static char *jsf_to_owned_cstring(JSContext *ctx, JSValueConst value)
 {
@@ -104,16 +177,33 @@ static void jsf_capture_exception(JSFRuntime *runtime)
 
     JSContext *ctx = runtime->context;
     JSValue exception = JS_GetException(ctx);
-    JSValue stack = JS_GetPropertyStr(ctx, exception, "stack");
-    char *message = NULL;
-
-    if (!JS_IsUndefined(stack) && !JS_IsNull(stack))
-        message = jsf_to_owned_cstring(ctx, stack);
-    if (!message)
-        message = jsf_to_owned_cstring(ctx, exception);
-
-    jsf_set_last_error(runtime, message ? message : "JavaScript exception");
-    free(message);
+    JSValue stack = JS_IsObject(exception) ? JS_GetPropertyStr(ctx, exception, "stack") : JS_UNDEFINED;
+    JSValue message = JS_ToString(ctx, exception);
+    char *legacy = jsf_to_owned_cstring(ctx, message);
+    jsf_set_last_error(runtime, legacy ? legacy : "JavaScript exception");
+    JSValue details = JS_NewObject(ctx);
+    JSValue name = JS_IsObject(exception) ? JS_GetPropertyStr(ctx, exception, "name") : JS_UNDEFINED;
+    JSValue text = JS_IsObject(exception) ? JS_GetPropertyStr(ctx, exception, "message") : JS_UNDEFINED;
+    JS_SetPropertyStr(ctx, details, "name", JS_IsString(name) ? JS_DupValue(ctx, name) : JS_NewString(ctx, "Error"));
+    JS_SetPropertyStr(ctx, details, "message", JS_IsString(text) ? JS_DupValue(ctx, text) : JS_DupValue(ctx, message));
+    JS_SetPropertyStr(ctx, details, "stack", JS_IsString(stack) ? JS_DupValue(ctx, stack) : JS_NULL);
+    if (JS_IsObject(exception)) {
+        JSValue cause = JS_GetPropertyStr(ctx, exception, "cause");
+        if (!JS_IsUndefined(cause) && !JS_IsException(cause)) {
+            JSValue cause_text = JS_ToString(ctx, cause);
+            if (!JS_IsException(cause_text)) JS_SetPropertyStr(ctx, details, "cause", cause_text);
+        }
+        JS_FreeValue(ctx, cause);
+    }
+    JS_FreeValue(ctx, name);
+    JS_FreeValue(ctx, text);
+    JSValue json = JS_JSONStringify(ctx, details, JS_UNDEFINED, JS_UNDEFINED);
+    if (!JS_IsException(json))
+        runtime->last_error_json = jsf_to_owned_cstring(ctx, json);
+    free(legacy);
+    JS_FreeValue(ctx, json);
+    JS_FreeValue(ctx, details);
+    JS_FreeValue(ctx, message);
     JS_FreeValue(ctx, stack);
     JS_FreeValue(ctx, exception);
 }
@@ -124,6 +214,7 @@ static JSFValue *jsf_value_new_owned(JSFRuntime *runtime, JSValue value)
     {
         return NULL;
     }
+    if (JS_IsException(value)) { jsf_capture_exception(runtime); return NULL; }
     JSFValue *ref = (JSFValue *)calloc(1, sizeof(JSFValue));
     if (!ref)
     {
@@ -131,6 +222,7 @@ static JSFValue *jsf_value_new_owned(JSFRuntime *runtime, JSValue value)
         jsf_set_last_error(runtime, "Out of memory allocating JSFValue");
         return NULL;
     }
+    runtime->live_values++;
     ref->owner = runtime;
     ref->value = value;
     return ref;
@@ -382,15 +474,6 @@ static JSValue jsf_create_dart_future_promise(JSFRuntime *runtime, int32_t futur
     return promise;
 }
 
-static JSValue jsf_replace_dart_future(JSFRuntime *runtime, JSValue value)
-{
-    int32_t future_id = 0;
-    if (!jsf_get_dart_future_id(runtime, value, &future_id))
-        return value;
-    JS_FreeValue(runtime->context, value);
-    return jsf_create_dart_future_promise(runtime, future_id);
-}
-
 static JSModuleDef *jsf_module_loader(JSContext *ctx, const char *module_name, void *opaque)
 {
     JSFRuntime *runtime = (JSFRuntime *)opaque;
@@ -402,7 +485,7 @@ static JSModuleDef *jsf_module_loader(JSContext *ctx, const char *module_name, v
         return NULL;
     }
 
-    JSValue func_val = JS_Eval(ctx, entry->source, strlen(entry->source), resolved_name,
+    JSValue func_val = JS_Eval(ctx, entry->source, entry->source_len, resolved_name,
                                JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
     if (JS_IsException(func_val))
         return NULL;
@@ -416,7 +499,7 @@ static JSValue jsf_json_stringify(JSContext *ctx, JSValueConst value)
 {
     const char *source =
         "(function(v){"
-        "const seen=[];"
+        "const seen=new Set();"
         "function enc(x){"
         "if(x===undefined)return {'$jsf.type':'Undefined'};"
         "if(typeof x==='bigint')return {'$jsf.type':'BigInt','value':x.toString()};"
@@ -430,31 +513,35 @@ static JSValue jsf_json_stringify(JSContext *ctx, JSValueConst value)
         "if(typeof x==='function')return {'$jsf.type':'Function'};"
         "if(typeof x==='symbol')return {'$jsf.type':'Symbol','value':String(x)};"
         "if(x===null||typeof x!=='object')return x;"
-        "if(seen.indexOf(x)>=0)throw new TypeError('circular reference');"
-        "seen.push(x);"
+        "if(seen.has(x))throw new TypeError('circular reference');"
+        "seen.add(x);"
         "try{"
         "if(x instanceof Date)return {'$jsf.type':'Date','value':x.toISOString()};"
         "if(x instanceof RegExp)return {'$jsf.type':'RegExp','source':x.source,'flags':x.flags};"
         "if(x instanceof Error)return {'$jsf.type':'Error','name':x.name,'message':x.message,'stack':x.stack};"
         "if(x instanceof Map)return {'$jsf.type':'Map','entries':Array.from(x.entries(),function(e){return [enc(e[0]),enc(e[1])];})};"
         "if(x instanceof Set)return {'$jsf.type':'Set','values':Array.from(x.values(),enc)};"
-        "if(typeof ArrayBuffer!=='undefined'&&ArrayBuffer.isView(x))return {'$jsf.type':'TypedArray','name':x.constructor.name,'values':Array.from(x)};"
+        "if(x instanceof DataView)return {'$jsf.type':'DataView','bytes':Array.from(new Uint8Array(x.buffer,x.byteOffset,x.byteLength))};"
+        "if(typeof ArrayBuffer!=='undefined'&&ArrayBuffer.isView(x))return {'$jsf.type':'TypedArray','name':x.constructor.name,'values':Array.from(x,enc)};"
         "if(typeof ArrayBuffer!=='undefined'&&x instanceof ArrayBuffer)return {'$jsf.type':'ArrayBuffer','bytes':Array.from(new Uint8Array(x))};"
         "if(Array.isArray(x)){var a=[];for(var i=0;i<x.length;i++){a.push(Object.prototype.hasOwnProperty.call(x,i)?enc(x[i]):{'$jsf.type':'ArrayHole'});}return a;}"
-        "var out={};Object.keys(x).forEach(function(k){out[k]=enc(x[k]);});return out;"
-        "}finally{seen.pop();}"
+        "var out=Object.create(null);Object.keys(x).forEach(function(k){out[k]=enc(x[k]);});return Object.prototype.hasOwnProperty.call(x,'$jsf.type')?{'$jsf.type':'Object',entries:Object.entries(out)}:out;"
+        "}finally{seen.delete(x);}"
         "}"
         "return JSON.stringify(enc(v));"
         "})";
 
-    JSValue fn = JS_Eval(ctx, source, strlen(source), "<jsf.stringify>", JS_EVAL_TYPE_GLOBAL);
-    if (JS_IsException(fn))
-        return fn;
+    JSFRuntime *runtime = JS_GetContextOpaque(ctx);
+    if (JS_IsUndefined(runtime->stringify_fn)) {
+        JSValue compiled = JS_Eval(ctx, source, strlen(source), "<jsf.stringify>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(compiled)) return compiled;
+        runtime->stringify_fn = compiled;
+    }
+    JSValue fn = runtime->stringify_fn;
 
     JSValue args[1] = {JS_DupValue(ctx, value)};
     JSValue result = JS_Call(ctx, fn, JS_UNDEFINED, 1, args);
     JS_FreeValue(ctx, args[0]);
-    JS_FreeValue(ctx, fn);
     return result;
 }
 
@@ -497,6 +584,11 @@ static JSValue jsf_parse_transfer_json(JSFRuntime *runtime, const char *json)
     if (JS_IsException(parsed))
         return parsed;
 
+    int32_t future_id;
+    if (jsf_get_dart_future_id(runtime, parsed, &future_id)) {
+        JS_FreeValue(runtime->context, parsed);
+        return jsf_create_dart_future_promise(runtime, future_id);
+    }
     const char *source =
         "(function revive(v){"
         "function r(x){"
@@ -512,29 +604,25 @@ static JSValue jsf_parse_transfer_json(JSFRuntime *runtime, const char *json)
         "if(t==='Map')return new Map((x.entries||[]).map(function(e){return [r(e[0]),r(e[1])];}));"
         "if(t==='Set')return new Set((x.values||[]).map(r));"
         "if(t==='ArrayBuffer')return new Uint8Array(x.bytes||[]).buffer;"
-        "if(t==='TypedArray'){var vals=x.values||[];var C=globalThis[x.name]||Array;try{return new C(vals);}catch(_){return vals;}}"
+        "if(t==='DataView')return new DataView(new Uint8Array(x.bytes||[]).buffer);"
+        "if(t==='TypedArray'){var vals=(x.values||[]).map(r);var C=globalThis[x.name];if(typeof C!=='function'||!C.BYTES_PER_ELEMENT)throw new TypeError('Unknown typed array');return new C(vals);}"
+        "if(t==='DartError'){var e=new Error(x.message||'');e.name=x.name||'DartError';if(x.stack)e.stack=x.stack;throw e;}"
         "if(t==='DartFuture')return {'$jsf.type':'DartFuture','id':x.id};"
-        "var out={};Object.keys(x).forEach(function(k){if(k!=='$jsf.type')out[k]=r(x[k]);});return out;"
+        "var out={};var entries=t==='Object'?x.entries:Object.entries(x);entries.forEach(function(e){Object.defineProperty(out,e[0],{value:r(e[1]),writable:true,enumerable:true,configurable:true});});return out;"
         "}"
         "return r(v);"
         "})";
 
-    JSValue fn = JS_Eval(runtime->context, source, strlen(source), "<jsf.revive>", JS_EVAL_TYPE_GLOBAL);
-    if (JS_IsException(fn))
-    {
-        JS_FreeValue(runtime->context, parsed);
-        jsf_capture_exception(runtime);
-        return JS_EXCEPTION;
+    if (JS_IsUndefined(runtime->revive_fn)) {
+        JSValue compiled = JS_Eval(runtime->context, source, strlen(source), "<jsf.revive>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(compiled)) { JS_FreeValue(runtime->context, parsed); return JS_EXCEPTION; }
+        runtime->revive_fn = compiled;
     }
+    JSValue fn = runtime->revive_fn;
 
     JSValue args[1] = {parsed};
     JSValue result = JS_Call(runtime->context, fn, JS_UNDEFINED, 1, args);
     JS_FreeValue(runtime->context, args[0]);
-    JS_FreeValue(runtime->context, fn);
-    if (JS_IsException(result))
-        jsf_capture_exception(runtime);
-    if (!JS_IsException(result))
-        result = jsf_replace_dart_future(runtime, result);
     return result;
 }
 
@@ -584,9 +672,14 @@ static JSValue jsf_dart_callback(JSContext *ctx, JSValueConst this_val, int argc
         if (!callback_result)
             return JS_UNDEFINED;
 
+        if (!jsf_check_owner(runtime, callback_result)) {
+            JSF_ValueFree(callback_result);
+            return JS_ThrowTypeError(ctx, "Callback returned a value from a different runtime");
+        }
         JSValue result = JS_DupValue(ctx, callback_result->value);
+        int is_error = callback_result->throw_on_return;
         JSF_ValueFree(callback_result);
-        return jsf_replace_dart_future(runtime, result);
+        return is_error ? JS_Throw(ctx, result) : result;
     }
 
     JSValue args_array = JS_NewArray(ctx);
@@ -610,7 +703,7 @@ static JSValue jsf_dart_callback(JSContext *ctx, JSValueConst this_val, int argc
     if (entry->free_result)
         entry->free_result(entry->opaque, result_json);
 
-    return jsf_replace_dart_future(runtime, result);
+    return result;
 }
 
 FFI_PLUGIN_EXPORT JSModuleDef *JS_LoadMjsModule(JSContext *ctx, const char *module_name, const char *module_source)
@@ -710,6 +803,91 @@ FFI_PLUGIN_EXPORT void JS_InitConsole(JSContext *ctx)
     JS_FreeValue(ctx, global_obj);
 }
 
+static void jsf_rejection_tracker(JSContext *ctx, JSValueConst promise, JSValueConst reason, JS_BOOL handled, void *opaque)
+{
+    JSFRuntime *runtime = opaque;
+    if (!runtime->rejection_tracking) return;
+    JSFRejection **cursor = &runtime->rejections;
+    while (*cursor) {
+        JSFRejection *entry = *cursor;
+        if (JS_VALUE_GET_PTR(entry->promise) == JS_VALUE_GET_PTR(promise)) {
+            if (handled) {
+                *cursor = entry->next;
+                JS_FreeValue(ctx, entry->promise); JS_FreeValue(ctx, entry->reason); free(entry);
+                runtime->rejection_count--;
+            }
+            return;
+        }
+        cursor = &entry->next;
+    }
+    if (handled || runtime->rejection_count >= 1024) return;
+    JSFRejection *entry = calloc(1, sizeof(*entry));
+    if (!entry) return;
+    entry->promise = JS_DupValue(ctx, promise); entry->reason = JS_DupValue(ctx, reason);
+    *cursor = entry; runtime->rejection_count++;
+}
+
+FFI_PLUGIN_EXPORT void JSF_RuntimeSetRejectionTracking(JSFRuntime *runtime, int32_t enabled)
+{
+    if (runtime) runtime->rejection_tracking = enabled;
+}
+
+FFI_PLUGIN_EXPORT JSFValue *JSF_RuntimeTakeRejection(JSFRuntime *runtime)
+{
+    if (!runtime || !runtime->rejections) return NULL;
+    JSFRejection *entry = runtime->rejections; runtime->rejections = entry->next;
+    JSFValue *value = jsf_value_new_owned(runtime, entry->reason);
+    JS_FreeValue(runtime->context, entry->promise); free(entry); runtime->rejection_count--;
+    return value;
+}
+
+static JSValue jsf_ignore_settlement(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv)
+{
+    (void)ctx; (void)this_value; (void)argc; (void)argv; return JS_UNDEFINED;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_ValueObservePromise(JSFValue *value)
+{
+    if (!value || !value->owner) return -1;
+    JSContext *ctx = value->owner->context;
+    jsf_begin_execution(value->owner);
+    JSValue then = JS_GetPropertyStr(ctx, value->value, "then");
+    JSValue ignore = JS_NewCFunction(ctx, jsf_ignore_settlement, "", 1);
+    JSValue args[2] = {ignore, ignore};
+    JSValue result = JS_IsException(then) ? JS_EXCEPTION : JS_Call(ctx, then, value->value, 2, args);
+    int failed = JS_IsException(result);
+    if (failed) jsf_capture_exception(value->owner);
+    JS_FreeValue(ctx, result); JS_FreeValue(ctx, ignore); JS_FreeValue(ctx, then);
+    jsf_end_execution(value->owner);
+    return failed ? -1 : 0;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_RuntimeUnregisterCallback(JSFRuntime *runtime, void *opaque)
+{
+    if (!runtime) return -1;
+    JSFDartCallbackEntry **cursor = &runtime->callbacks;
+    while (*cursor) {
+        JSFDartCallbackEntry *entry = *cursor;
+        if (entry->opaque == opaque) {
+            if (runtime->execution_depth) { entry->callback = NULL; entry->handle_callback = NULL; runtime->callbacks_need_cleanup = 1; }
+            else { *cursor = entry->next; free(entry); }
+            return 0;
+        }
+        cursor = &entry->next;
+    }
+    return 0;
+}
+
+FFI_PLUGIN_EXPORT char *JSF_RuntimeStatistics(JSFRuntime *runtime)
+{
+    if (!runtime) return NULL;
+    JSMemoryUsage usage; JS_ComputeMemoryUsage(runtime->runtime, &usage);
+    char buffer[256];
+    snprintf(buffer, sizeof(buffer), "{\"memoryUsedBytes\":%lld,\"allocatedBytes\":%lld,\"liveHandles\":%lld}",
+             (long long)usage.memory_used_size, (long long)usage.malloc_size, (long long)runtime->live_values);
+    return jsf_strdup(buffer);
+}
+
 FFI_PLUGIN_EXPORT JSFRuntime *JSF_RuntimeNew(void)
 {
     JSFRuntime *runtime = (JSFRuntime *)calloc(1, sizeof(JSFRuntime));
@@ -731,9 +909,15 @@ FFI_PLUGIN_EXPORT JSFRuntime *JSF_RuntimeNew(void)
         return NULL;
     }
 
+    JSValue buffer = JS_NewArrayBufferCopy(runtime->context, NULL, 0);
+    runtime->array_buffer_class = JS_GetClassID(buffer);
+    JS_FreeValue(runtime->context, buffer);
+    runtime->stringify_fn = JS_UNDEFINED;
+    runtime->revive_fn = JS_UNDEFINED;
     runtime->next_callback_id = 1;
     JS_SetContextOpaque(runtime->context, runtime);
     JS_SetInterruptHandler(runtime->runtime, jsf_interrupt_handler, runtime);
+    JS_SetHostPromiseRejectionTracker(runtime->runtime, jsf_rejection_tracker, runtime);
     JS_SetModuleLoaderFunc(runtime->runtime, jsf_module_normalize, jsf_module_loader, runtime);
     JS_InitConsole(runtime->context);
     return runtime;
@@ -744,6 +928,16 @@ FFI_PLUGIN_EXPORT void JSF_RuntimeFree(JSFRuntime *runtime)
     if (!runtime)
         return;
 
+    if (runtime->execution_depth) {
+        jsf_set_last_error(runtime, "Cannot dispose a runtime during JavaScript execution");
+        return;
+    }
+    if (runtime->live_values) {
+        jsf_set_last_error(runtime, "Dispose all JSFValue handles before freeing the runtime");
+        return;
+    }
+    JS_FreeValue(runtime->context, runtime->stringify_fn);
+    JS_FreeValue(runtime->context, runtime->revive_fn);
     JSFDartCallbackEntry *entry = runtime->callbacks;
     while (entry)
     {
@@ -754,12 +948,17 @@ FFI_PLUGIN_EXPORT void JSF_RuntimeFree(JSFRuntime *runtime)
     jsf_free_modules(runtime);
     jsf_free_module_aliases(runtime);
     jsf_free_dart_futures(runtime);
+    while (runtime->rejections) {
+        JSFValue *value = JSF_RuntimeTakeRejection(runtime);
+        JSF_ValueFree(value);
+    }
 
     if (runtime->context)
         JS_FreeContext(runtime->context);
     if (runtime->runtime)
         JS_FreeRuntime(runtime->runtime);
     free(runtime->last_error);
+    free(runtime->last_error_json);
     free(runtime);
 }
 
@@ -779,23 +978,24 @@ FFI_PLUGIN_EXPORT void JSF_RuntimeSetTimeout(JSFRuntime *runtime, int32_t timeou
 {
     if (!runtime)
         return;
-    runtime->deadline_ms = timeout_ms <= 0 ? 0 : jsf_now_ms() + timeout_ms;
+    if (timeout_ms < 0) { jsf_set_last_error(runtime, "Timeout must be nonnegative"); return; }
+    runtime->timeout_ms = timeout_ms;
+    if (runtime->execution_depth) runtime->deadline_ms = timeout_ms ? jsf_now_ms() + timeout_ms : 0;
 }
 
 FFI_PLUGIN_EXPORT void JSF_RuntimeClearTimeout(JSFRuntime *runtime)
 {
-    if (runtime)
-        runtime->deadline_ms = 0;
+    if (runtime) { runtime->timeout_ms = 0; runtime->deadline_ms = 0; }
 }
 
-FFI_PLUGIN_EXPORT int32_t JSF_RuntimeExecutePendingJobs(JSFRuntime *runtime)
+static int32_t JSF_RuntimeExecutePendingJobsMax_impl(JSFRuntime *runtime, int32_t max_jobs)
 {
     if (!runtime || !runtime->runtime)
         return -1;
 
     int32_t count = 0;
     JSContext *ctx = NULL;
-    for (;;)
+    while (max_jobs <= 0 || count < max_jobs)
     {
         int ret = JS_ExecutePendingJob(runtime->runtime, &ctx);
         if (ret <= 0)
@@ -806,6 +1006,17 @@ FFI_PLUGIN_EXPORT int32_t JSF_RuntimeExecutePendingJobs(JSFRuntime *runtime)
         }
         count++;
     }
+    return count;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_RuntimeExecutePendingJobs(JSFRuntime *runtime)
+{
+    return JSF_RuntimeExecutePendingJobsMax(runtime, 0);
+}
+
+FFI_PLUGIN_EXPORT const char *JSF_RuntimeLastErrorJson(JSFRuntime *runtime)
+{
+    return runtime ? runtime->last_error_json : NULL;
 }
 
 FFI_PLUGIN_EXPORT const char *JSF_RuntimeLastError(JSFRuntime *runtime)
@@ -815,7 +1026,7 @@ FFI_PLUGIN_EXPORT const char *JSF_RuntimeLastError(JSFRuntime *runtime)
     return runtime->last_error;
 }
 
-FFI_PLUGIN_EXPORT int32_t JSF_RuntimeRegisterModule(JSFRuntime *runtime, const char *module_name, const char *module_source)
+FFI_PLUGIN_EXPORT int32_t JSF_RuntimeRegisterModuleLen(JSFRuntime *runtime, const char *module_name, const char *module_source, size_t source_len)
 {
     if (!runtime || !module_name || !module_source)
         return -1;
@@ -823,7 +1034,7 @@ FFI_PLUGIN_EXPORT int32_t JSF_RuntimeRegisterModule(JSFRuntime *runtime, const c
     JSFModuleEntry *entry = jsf_find_module(runtime, module_name);
     if (entry)
     {
-        char *source = jsf_strdup(module_source);
+        char *source = jsf_strndup(module_source, source_len);
         if (!source)
         {
             jsf_set_last_error(runtime, "Out of memory registering JavaScript module");
@@ -831,6 +1042,7 @@ FFI_PLUGIN_EXPORT int32_t JSF_RuntimeRegisterModule(JSFRuntime *runtime, const c
         }
         free(entry->source);
         entry->source = source;
+        entry->source_len = source_len;
         return 0;
     }
 
@@ -841,7 +1053,8 @@ FFI_PLUGIN_EXPORT int32_t JSF_RuntimeRegisterModule(JSFRuntime *runtime, const c
         return -1;
     }
     entry->name = jsf_strdup(module_name);
-    entry->source = jsf_strdup(module_source);
+    entry->source = jsf_strndup(module_source, source_len);
+    entry->source_len = source_len;
     if (!entry->name || !entry->source)
     {
         free(entry->name);
@@ -901,7 +1114,7 @@ FFI_PLUGIN_EXPORT int32_t JSF_RuntimeRegisterModuleAlias(JSFRuntime *runtime, co
     return 0;
 }
 
-FFI_PLUGIN_EXPORT int32_t JSF_RuntimeResolveDartFuture(JSFRuntime *runtime, int32_t future_id, const char *result_json, int32_t is_error)
+static int32_t JSF_RuntimeResolveDartFuture_impl(JSFRuntime *runtime, int32_t future_id, const char *result_json, int32_t is_error)
 {
     if (!runtime || !runtime->context)
         return -1;
@@ -932,13 +1145,13 @@ FFI_PLUGIN_EXPORT int32_t JSF_RuntimeResolveDartFuture(JSFRuntime *runtime, int3
     return JSF_RuntimeExecutePendingJobs(runtime);
 }
 
-FFI_PLUGIN_EXPORT JSFValue *JSF_Eval(JSFRuntime *runtime, const char *code, const char *filename, int32_t module)
+static JSFValue * JSF_EvalLen_impl(JSFRuntime *runtime, const char *code, size_t code_len, const char *filename, int32_t module)
 {
     if (!runtime || !runtime->context || !code)
         return NULL;
 
     int flags = module ? JS_EVAL_TYPE_MODULE : JS_EVAL_TYPE_GLOBAL;
-    JSValue result = JS_Eval(runtime->context, code, strlen(code), filename ? filename : "<eval>", flags);
+    JSValue result = JS_Eval(runtime->context, code, code_len, filename ? filename : "<eval>", flags);
     if (JS_IsException(result))
     {
         jsf_capture_exception(runtime);
@@ -947,12 +1160,22 @@ FFI_PLUGIN_EXPORT JSFValue *JSF_Eval(JSFRuntime *runtime, const char *code, cons
     return jsf_value_new_owned(runtime, result);
 }
 
-FFI_PLUGIN_EXPORT JSFValue *JSF_LoadModule(JSFRuntime *runtime, const char *module_name, const char *module_source)
+static JSFValue * JSF_LoadModuleLen_impl(JSFRuntime *runtime, const char *module_name, const char *module_source, size_t source_len)
 {
     if (!runtime || !runtime->context)
         return NULL;
-    JSModuleDef *module = JS_LoadMjsModule(runtime->context, module_name, module_source);
-    if (!module)
+    JSValue compiled = JS_Eval(runtime->context, module_source, source_len, module_name,
+                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    if (JS_IsException(compiled))
+    {
+        jsf_capture_exception(runtime);
+        return NULL;
+    }
+    JSModuleDef *module = JS_VALUE_GET_PTR(compiled);
+    JSValue result = JS_EvalFunction(runtime->context, compiled);
+    int failed = JS_IsException(result);
+    JS_FreeValue(runtime->context, result);
+    if (failed)
     {
         jsf_capture_exception(runtime);
         return NULL;
@@ -966,7 +1189,24 @@ FFI_PLUGIN_EXPORT JSFValue *JSF_LoadModule(JSFRuntime *runtime, const char *modu
     return jsf_value_new_owned(runtime, namespace_value);
 }
 
-FFI_PLUGIN_EXPORT JSFValue *JSF_GetGlobal(JSFRuntime *runtime, const char *name)
+static JSAtom jsf_json_atom(JSFRuntime *runtime, const char *json)
+{
+    JSContext *ctx = runtime->context;
+    JSValue key = JS_ParseJSON(ctx, json, strlen(json), "<property>");
+    if (JS_IsException(key))
+        return JS_ATOM_NULL;
+    if (!JS_IsString(key))
+    {
+        JS_FreeValue(ctx, key);
+        JS_ThrowTypeError(ctx, "Property name must be a JSON string");
+        return JS_ATOM_NULL;
+    }
+    JSAtom atom = JS_ValueToAtom(ctx, key);
+    JS_FreeValue(ctx, key);
+    return atom;
+}
+
+static JSFValue * JSF_GetGlobal_impl(JSFRuntime *runtime, const char *name)
 {
     if (!runtime || !runtime->context || !name)
         return NULL;
@@ -981,10 +1221,34 @@ FFI_PLUGIN_EXPORT JSFValue *JSF_GetGlobal(JSFRuntime *runtime, const char *name)
     return jsf_value_new_owned(runtime, value);
 }
 
-FFI_PLUGIN_EXPORT int32_t JSF_SetGlobal(JSFRuntime *runtime, const char *name, JSFValue *value)
+static JSFValue * JSF_GetGlobalJson_impl(JSFRuntime *runtime, const char *name)
+{
+    if (!runtime || !runtime->context || !name)
+        return NULL;
+    JSAtom atom = jsf_json_atom(runtime, name);
+    if (atom == JS_ATOM_NULL)
+    {
+        jsf_capture_exception(runtime);
+        return NULL;
+    }
+    JSValue global = JS_GetGlobalObject(runtime->context);
+    JSValue value = JS_GetProperty(runtime->context, global, atom);
+    JS_FreeValue(runtime->context, global);
+    JS_FreeAtom(runtime->context, atom);
+    if (JS_IsException(value))
+    {
+        jsf_capture_exception(runtime);
+        return NULL;
+    }
+    return jsf_value_new_owned(runtime, value);
+}
+
+static int32_t JSF_SetGlobal_impl(JSFRuntime *runtime, const char *name, JSFValue *value)
 {
     if (!runtime || !runtime->context || !name || !value)
         return -1;
+    if (!jsf_check_owner(runtime, value)) return -1;
+
     JSValue global = JS_GetGlobalObject(runtime->context);
     int ret = JS_SetPropertyStr(runtime->context, global, name, JS_DupValue(runtime->context, value->value));
     JS_FreeValue(runtime->context, global);
@@ -993,10 +1257,35 @@ FFI_PLUGIN_EXPORT int32_t JSF_SetGlobal(JSFRuntime *runtime, const char *name, J
     return ret;
 }
 
-FFI_PLUGIN_EXPORT JSFValue *JSF_Call(JSFRuntime *runtime, JSFValue *function, JSFValue *this_value, JSFValue **argv, int32_t argc)
+static int32_t JSF_SetGlobalJson_impl(JSFRuntime *runtime, const char *name, JSFValue *value)
+{
+    if (!runtime || !runtime->context || !name || !value)
+        return -1;
+    if (!jsf_check_owner(runtime, value)) return -1;
+
+    JSAtom atom = jsf_json_atom(runtime, name);
+    if (atom == JS_ATOM_NULL)
+    {
+        jsf_capture_exception(runtime);
+        return -1;
+    }
+    JSValue global = JS_GetGlobalObject(runtime->context);
+    int ret = JS_SetProperty(runtime->context, global, atom, JS_DupValue(runtime->context, value->value));
+    JS_FreeValue(runtime->context, global);
+    JS_FreeAtom(runtime->context, atom);
+    if (ret < 0)
+        jsf_capture_exception(runtime);
+    return ret;
+}
+
+static JSFValue * JSF_Call_impl(JSFRuntime *runtime, JSFValue *function, JSFValue *this_value, JSFValue **argv, int32_t argc)
 {
     if (!runtime || !runtime->context || !function)
         return NULL;
+    if (!jsf_check_owner(runtime, function) || (this_value && !jsf_check_owner(runtime, this_value))) return NULL;
+    if (argc < 0 || (argc && !argv)) { jsf_set_last_error(runtime, "Invalid call arguments"); return NULL; }
+    for (int32_t i=0; i<argc; i++) if (!jsf_check_owner(runtime, argv[i])) return NULL;
+
 
     JSValue *args = NULL;
     if (argc > 0)
@@ -1038,7 +1327,7 @@ FFI_PLUGIN_EXPORT JSFValue *JSF_CallGlobal(JSFRuntime *runtime, const char *name
     return result;
 }
 
-FFI_PLUGIN_EXPORT int32_t JSF_RegisterDartFunction(JSFRuntime *runtime, const char *name, JSFDartFunction callback, JSFDartFreeFunction free_result, void *opaque)
+static int32_t JSF_RegisterDartFunction_impl(JSFRuntime *runtime, const char *name, JSFDartFunction callback, JSFDartFreeFunction free_result, void *opaque)
 {
     if (!runtime || !runtime->context || !name || !callback)
         return -1;
@@ -1063,8 +1352,9 @@ FFI_PLUGIN_EXPORT int32_t JSF_RegisterDartFunction(JSFRuntime *runtime, const ch
     if (JS_IsException(function))
     {
         jsf_capture_exception(runtime);
-        runtime->callbacks = entry->next;
-        free(entry);
+        entry->callback = NULL;
+        entry->handle_callback = NULL;
+        runtime->callbacks_need_cleanup = 1;
         return -1;
     }
 
@@ -1074,13 +1364,69 @@ FFI_PLUGIN_EXPORT int32_t JSF_RegisterDartFunction(JSFRuntime *runtime, const ch
     if (ret < 0)
     {
         jsf_capture_exception(runtime);
-        runtime->callbacks = entry->next;
-        free(entry);
+        entry->callback = NULL;
+        entry->handle_callback = NULL;
+        runtime->callbacks_need_cleanup = 1;
     }
     return ret;
 }
 
-FFI_PLUGIN_EXPORT int32_t JSF_RegisterDartHandleFunction(JSFRuntime *runtime, const char *name, JSFDartHandleFunction callback, void *opaque)
+static int32_t JSF_RegisterDartFunctionJson_impl(JSFRuntime *runtime, const char *name, JSFDartFunction callback, JSFDartFreeFunction free_result, void *opaque)
+{
+    if (!runtime || !runtime->context || !name || !callback)
+        return -1;
+
+    JSFDartCallbackEntry *entry = (JSFDartCallbackEntry *)calloc(1, sizeof(JSFDartCallbackEntry));
+    if (!entry)
+    {
+        jsf_set_last_error(runtime, "Out of memory allocating Dart callback");
+        return -1;
+    }
+    entry->id = runtime->next_callback_id++;
+    entry->callback = callback;
+    entry->free_result = free_result;
+    entry->opaque = opaque;
+    entry->next = runtime->callbacks;
+    runtime->callbacks = entry;
+
+    JSValue data[1] = {JS_NewInt32(runtime->context, entry->id)};
+    JSValue function = JS_NewCFunctionData(runtime->context, jsf_dart_callback, 0, 0, 1, data);
+    JS_FreeValue(runtime->context, data[0]);
+
+    if (JS_IsException(function))
+    {
+        jsf_capture_exception(runtime);
+        entry->callback = NULL;
+        entry->handle_callback = NULL;
+        runtime->callbacks_need_cleanup = 1;
+        return -1;
+    }
+
+    JSAtom atom = jsf_json_atom(runtime, name);
+    if (atom == JS_ATOM_NULL)
+    {
+        JS_FreeValue(runtime->context, function);
+        jsf_capture_exception(runtime);
+        entry->callback = NULL;
+        entry->handle_callback = NULL;
+        runtime->callbacks_need_cleanup = 1;
+        return -1;
+    }
+    JSValue global = JS_GetGlobalObject(runtime->context);
+    int ret = JS_SetProperty(runtime->context, global, atom, function);
+    JS_FreeValue(runtime->context, global);
+    JS_FreeAtom(runtime->context, atom);
+    if (ret < 0)
+    {
+        jsf_capture_exception(runtime);
+        entry->callback = NULL;
+        entry->handle_callback = NULL;
+        runtime->callbacks_need_cleanup = 1;
+    }
+    return ret;
+}
+
+static int32_t JSF_RegisterDartHandleFunction_impl(JSFRuntime *runtime, const char *name, JSFDartHandleFunction callback, void *opaque)
 {
     if (!runtime || !runtime->context || !name || !callback)
         return -1;
@@ -1104,8 +1450,9 @@ FFI_PLUGIN_EXPORT int32_t JSF_RegisterDartHandleFunction(JSFRuntime *runtime, co
     if (JS_IsException(function))
     {
         jsf_capture_exception(runtime);
-        runtime->callbacks = entry->next;
-        free(entry);
+        entry->callback = NULL;
+        entry->handle_callback = NULL;
+        runtime->callbacks_need_cleanup = 1;
         return -1;
     }
 
@@ -1115,8 +1462,63 @@ FFI_PLUGIN_EXPORT int32_t JSF_RegisterDartHandleFunction(JSFRuntime *runtime, co
     if (ret < 0)
     {
         jsf_capture_exception(runtime);
-        runtime->callbacks = entry->next;
-        free(entry);
+        entry->callback = NULL;
+        entry->handle_callback = NULL;
+        runtime->callbacks_need_cleanup = 1;
+    }
+    return ret;
+}
+
+static int32_t JSF_RegisterDartHandleFunctionJson_impl(JSFRuntime *runtime, const char *name, JSFDartHandleFunction callback, void *opaque)
+{
+    if (!runtime || !runtime->context || !name || !callback)
+        return -1;
+
+    JSFDartCallbackEntry *entry = (JSFDartCallbackEntry *)calloc(1, sizeof(JSFDartCallbackEntry));
+    if (!entry)
+    {
+        jsf_set_last_error(runtime, "Out of memory allocating Dart handle callback");
+        return -1;
+    }
+    entry->id = runtime->next_callback_id++;
+    entry->handle_callback = callback;
+    entry->opaque = opaque;
+    entry->next = runtime->callbacks;
+    runtime->callbacks = entry;
+
+    JSValue data[1] = {JS_NewInt32(runtime->context, entry->id)};
+    JSValue function = JS_NewCFunctionData(runtime->context, jsf_dart_callback, 0, 0, 1, data);
+    JS_FreeValue(runtime->context, data[0]);
+
+    if (JS_IsException(function))
+    {
+        jsf_capture_exception(runtime);
+        entry->callback = NULL;
+        entry->handle_callback = NULL;
+        runtime->callbacks_need_cleanup = 1;
+        return -1;
+    }
+
+    JSAtom atom = jsf_json_atom(runtime, name);
+    if (atom == JS_ATOM_NULL)
+    {
+        JS_FreeValue(runtime->context, function);
+        jsf_capture_exception(runtime);
+        entry->callback = NULL;
+        entry->handle_callback = NULL;
+        runtime->callbacks_need_cleanup = 1;
+        return -1;
+    }
+    JSValue global = JS_GetGlobalObject(runtime->context);
+    int ret = JS_SetProperty(runtime->context, global, atom, function);
+    JS_FreeValue(runtime->context, global);
+    JS_FreeAtom(runtime->context, atom);
+    if (ret < 0)
+    {
+        jsf_capture_exception(runtime);
+        entry->callback = NULL;
+        entry->handle_callback = NULL;
+        runtime->callbacks_need_cleanup = 1;
     }
     return ret;
 }
@@ -1151,7 +1553,7 @@ FFI_PLUGIN_EXPORT JSFValue *JSF_ValueNewString(JSFRuntime *runtime, const char *
     return jsf_value_new_owned(runtime, JS_NewString(runtime->context, value ? value : ""));
 }
 
-FFI_PLUGIN_EXPORT JSFValue *JSF_ValueNewBigInt(JSFRuntime *runtime, const char *decimal_value)
+static JSFValue * JSF_ValueNewBigInt_impl(JSFRuntime *runtime, const char *decimal_value)
 {
     if (!runtime || !runtime->context)
         return NULL;
@@ -1180,13 +1582,12 @@ FFI_PLUGIN_EXPORT JSFValue *JSF_ValueNewJson(JSFRuntime *runtime, const char *js
     return jsf_value_new_owned(runtime, value);
 }
 
-FFI_PLUGIN_EXPORT JSFValue *JSF_ValueNewTransferJson(JSFRuntime *runtime, const char *json)
+static JSFValue * JSF_ValueNewTransferJson_impl(JSFRuntime *runtime, const char *json)
 {
     if (!runtime || !runtime->context)
         return NULL;
     JSValue value = jsf_parse_transfer_json(runtime, json);
-    if (JS_IsException(value))
-        return NULL;
+    if (JS_IsException(value)) { jsf_capture_exception(runtime); return NULL; }
     return jsf_value_new_owned(runtime, value);
 }
 
@@ -1204,8 +1605,17 @@ FFI_PLUGIN_EXPORT void JSF_ValueFree(JSFValue *value)
 {
     if (!value)
         return;
-    if (value->owner && value->owner->context)
+    if (value->pending_free) return;
+    if (value->owner && value->owner->execution_depth) {
+        value->pending_free = 1;
+        value->next_deferred = value->owner->deferred_values;
+        value->owner->deferred_values = value;
+        return;
+    }
+    if (value->owner && value->owner->context) {
+        value->owner->live_values--;
         JS_FreeValue(value->owner->context, value->value);
+    }
     free(value);
 }
 
@@ -1238,6 +1648,7 @@ FFI_PLUGIN_EXPORT JSFValueType JSF_ValueType(JSFValue *value)
         return JS_VALUE_GET_TAG(value->value) == JS_TAG_INT ? JSF_VALUE_INT : JSF_VALUE_FLOAT;
     if (JS_IsObject(value->value))
     {
+        if (JS_GetClassID(value->value) == value->owner->array_buffer_class) return JSF_VALUE_ARRAY_BUFFER;
         if (JS_IsFunction(ctx, value->value))
             return JSF_VALUE_FUNCTION;
         if (JS_IsArray(ctx, value->value))
@@ -1274,21 +1685,21 @@ FFI_PLUGIN_EXPORT double JSF_ValueToFloat64(JSFValue *value)
     return out;
 }
 
-FFI_PLUGIN_EXPORT char *JSF_ValueToCString(JSFValue *value)
+static char * JSF_ValueToCString_impl(JSFValue *value)
 {
     if (!value || !value->owner)
         return NULL;
     return jsf_to_owned_cstring(value->owner->context, value->value);
 }
 
-FFI_PLUGIN_EXPORT char *JSF_ValueToJson(JSFValue *value)
+static char * JSF_ValueToJson_impl(JSFValue *value)
 {
     if (!value || !value->owner)
         return NULL;
     return jsf_value_to_json_owned(value->owner, value->value);
 }
 
-FFI_PLUGIN_EXPORT int32_t JSF_ValueArrayLength(JSFValue *value)
+static int32_t JSF_ValueArrayLength_impl(JSFValue *value)
 {
     if (!value || !value->owner)
         return -1;
@@ -1299,7 +1710,7 @@ FFI_PLUGIN_EXPORT int32_t JSF_ValueArrayLength(JSFValue *value)
     return out;
 }
 
-FFI_PLUGIN_EXPORT JSFValue *JSF_ValueArrayGet(JSFValue *value, uint32_t index)
+static JSFValue * JSF_ValueArrayGet_impl(JSFValue *value, uint32_t index)
 {
     if (!value || !value->owner)
         return NULL;
@@ -1312,17 +1723,19 @@ FFI_PLUGIN_EXPORT JSFValue *JSF_ValueArrayGet(JSFValue *value, uint32_t index)
     return jsf_value_new_owned(value->owner, element);
 }
 
-FFI_PLUGIN_EXPORT int32_t JSF_ValueArraySet(JSFValue *value, uint32_t index, JSFValue *element)
+static int32_t JSF_ValueArraySet_impl(JSFValue *value, uint32_t index, JSFValue *element)
 {
     if (!value || !value->owner || !element)
         return -1;
+    if (!jsf_check_owner(value->owner, element)) return -1;
+
     int ret = JS_SetPropertyUint32(value->owner->context, value->value, index, JS_DupValue(value->owner->context, element->value));
     if (ret < 0)
         jsf_capture_exception(value->owner);
     return ret;
 }
 
-FFI_PLUGIN_EXPORT JSFValue *JSF_ValueObjectGet(JSFValue *value, const char *key)
+static JSFValue * JSF_ValueObjectGet_impl(JSFValue *value, const char *key)
 {
     if (!value || !value->owner || !key)
         return NULL;
@@ -1335,11 +1748,52 @@ FFI_PLUGIN_EXPORT JSFValue *JSF_ValueObjectGet(JSFValue *value, const char *key)
     return jsf_value_new_owned(value->owner, property);
 }
 
-FFI_PLUGIN_EXPORT int32_t JSF_ValueObjectSet(JSFValue *value, const char *key, JSFValue *property)
+static JSFValue * JSF_ValueObjectGetJson_impl(JSFValue *value, const char *key)
+{
+    if (!value || !value->owner || !key)
+        return NULL;
+    JSAtom atom = jsf_json_atom(value->owner, key);
+    if (atom == JS_ATOM_NULL)
+    {
+        jsf_capture_exception(value->owner);
+        return NULL;
+    }
+    JSValue property = JS_GetProperty(value->owner->context, value->value, atom);
+    JS_FreeAtom(value->owner->context, atom);
+    if (JS_IsException(property))
+    {
+        jsf_capture_exception(value->owner);
+        return NULL;
+    }
+    return jsf_value_new_owned(value->owner, property);
+}
+
+static int32_t JSF_ValueObjectSet_impl(JSFValue *value, const char *key, JSFValue *property)
 {
     if (!value || !value->owner || !key || !property)
         return -1;
+    if (!jsf_check_owner(value->owner, property)) return -1;
+
     int ret = JS_SetPropertyStr(value->owner->context, value->value, key, JS_DupValue(value->owner->context, property->value));
+    if (ret < 0)
+        jsf_capture_exception(value->owner);
+    return ret;
+}
+
+static int32_t JSF_ValueObjectSetJson_impl(JSFValue *value, const char *key, JSFValue *property)
+{
+    if (!value || !value->owner || !key || !property)
+        return -1;
+    if (!jsf_check_owner(value->owner, property)) return -1;
+
+    JSAtom atom = jsf_json_atom(value->owner, key);
+    if (atom == JS_ATOM_NULL)
+    {
+        jsf_capture_exception(value->owner);
+        return -1;
+    }
+    int ret = JS_SetProperty(value->owner->context, value->value, atom, JS_DupValue(value->owner->context, property->value));
+    JS_FreeAtom(value->owner->context, atom);
     if (ret < 0)
         jsf_capture_exception(value->owner);
     return ret;
@@ -1374,4 +1828,324 @@ FFI_PLUGIN_EXPORT JSFValue *JSF_ValuePromiseResult(JSFValue *value)
 FFI_PLUGIN_EXPORT void JSF_FreeCString(char *value)
 {
     free(value);
+}
+
+FFI_PLUGIN_EXPORT JSFValue *JSF_ValueNewArrayBuffer(JSFRuntime *runtime, const uint8_t *bytes, size_t length)
+{
+    return jsf_value_new_owned(runtime, JS_NewArrayBufferCopy(runtime->context, bytes, length));
+}
+
+FFI_PLUGIN_EXPORT JSFValue *JSF_ValueAllocArrayBuffer(JSFRuntime *runtime, size_t length, uint8_t **data)
+{
+    if (data)
+        *data = NULL;
+    if (!runtime || !runtime->context || !data)
+    {
+        if (runtime)
+            jsf_set_last_error(runtime, "Invalid ArrayBuffer allocation arguments");
+        return NULL;
+    }
+    /* In our bundled QuickJS, a NULL source allocates normal zero-filled
+     * storage without a source copy. This keeps the standard allocator,
+     * memory accounting, finalizer and ArrayBuffer.transfer behavior. */
+    JSValue value = JS_NewArrayBufferCopy(runtime->context, NULL, length);
+    if (JS_IsException(value))
+    {
+        jsf_capture_exception(runtime);
+        return NULL;
+    }
+    size_t actual_length;
+    uint8_t *bytes = JS_GetArrayBuffer(runtime->context, &actual_length, value);
+    if (!bytes || actual_length != length)
+    {
+        JS_FreeValue(runtime->context, value);
+        if (JS_HasException(runtime->context))
+            jsf_capture_exception(runtime);
+        else
+            jsf_set_last_error(runtime, "Unable to access allocated ArrayBuffer");
+        return NULL;
+    }
+    JSFValue *result = jsf_value_new_owned(runtime, value);
+    if (result)
+        *data = bytes;
+    return result;
+}
+
+FFI_PLUGIN_EXPORT const uint8_t *JSF_ValueArrayBufferData(JSFValue *value, size_t *length)
+{
+    *length = SIZE_MAX;
+    uint8_t *data = JS_GetArrayBuffer(value->owner->context, length, value->value);
+    if (!data && JS_HasException(value->owner->context))
+    {
+        *length = SIZE_MAX;
+        jsf_capture_exception(value->owner);
+    }
+    return data;
+}
+
+static int32_t JSF_RuntimeResolveDartFutureValue_impl(JSFRuntime *runtime, int32_t future_id, JSFValue *value, int32_t is_error)
+{
+    if (!jsf_check_owner(runtime, value)) return -1;
+    JSFDartFutureEntry *entry = jsf_take_dart_future(runtime, future_id);
+    if (!entry)
+    {
+        jsf_set_last_error(runtime, "Dart Future resolver was not found");
+        return -1;
+    }
+    JSValue ret = JS_Call(runtime->context, entry->resolving_funcs[is_error ? 1 : 0], JS_UNDEFINED, 1, &value->value);
+    int failed = JS_IsException(ret);
+    if (failed)
+        jsf_capture_exception(runtime);
+    JS_FreeValue(runtime->context, ret);
+    JS_FreeValue(runtime->context, entry->resolving_funcs[0]);
+    JS_FreeValue(runtime->context, entry->resolving_funcs[1]);
+    free(entry);
+    return failed ? -1 : 0;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_RuntimeRegisterModule(JSFRuntime *runtime, const char *module_name, const char *module_source)
+{
+    return JSF_RuntimeRegisterModuleLen(runtime, module_name, module_source, module_source ? strlen(module_source) : 0);
+}
+
+FFI_PLUGIN_EXPORT JSFValue *JSF_Eval(JSFRuntime *runtime, const char *code, const char *filename, int32_t module)
+{
+    return JSF_EvalLen(runtime, code, code ? strlen(code) : 0, filename, module);
+}
+
+FFI_PLUGIN_EXPORT JSFValue *JSF_LoadModule(JSFRuntime *runtime, const char *module_name, const char *module_source)
+{
+    return JSF_LoadModuleLen(runtime, module_name, module_source, module_source ? strlen(module_source) : 0);
+}
+
+FFI_PLUGIN_EXPORT JSFValue *JSF_ValueNewExceptionJson(JSFRuntime *runtime, const char *json)
+{
+    JSFValue *value = JSF_ValueNewTransferJson(runtime, json);
+    if (value) value->throw_on_return = 1;
+    return value;
+}
+
+FFI_PLUGIN_EXPORT JSFValue * JSF_EvalLen(JSFRuntime *runtime, const char *code, size_t code_len, const char *filename, int32_t module)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    JSFValue * result = JSF_EvalLen_impl(runtime, code, code_len, filename, module);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT JSFValue * JSF_LoadModuleLen(JSFRuntime *runtime, const char *module_name, const char *module_source, size_t source_len)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    JSFValue * result = JSF_LoadModuleLen_impl(runtime, module_name, module_source, source_len);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT JSFValue * JSF_Call(JSFRuntime *runtime, JSFValue *function, JSFValue *this_value, JSFValue **argv, int32_t argc)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    JSFValue * result = JSF_Call_impl(runtime, function, this_value, argv, argc);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT JSFValue * JSF_GetGlobal(JSFRuntime *runtime, const char *name)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    JSFValue * result = JSF_GetGlobal_impl(runtime, name);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT JSFValue * JSF_GetGlobalJson(JSFRuntime *runtime, const char *name)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    JSFValue * result = JSF_GetGlobalJson_impl(runtime, name);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_SetGlobal(JSFRuntime *runtime, const char *name, JSFValue *value)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    int32_t result = JSF_SetGlobal_impl(runtime, name, value);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_SetGlobalJson(JSFRuntime *runtime, const char *name, JSFValue *value)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    int32_t result = JSF_SetGlobalJson_impl(runtime, name, value);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT JSFValue * JSF_ValueNewTransferJson(JSFRuntime *runtime, const char *json)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    JSFValue * result = JSF_ValueNewTransferJson_impl(runtime, json);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT JSFValue * JSF_ValueNewBigInt(JSFRuntime *runtime, const char *decimal_value)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    JSFValue * result = JSF_ValueNewBigInt_impl(runtime, decimal_value);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT char * JSF_ValueToJson(JSFValue *value)
+{
+    JSFRuntime *scope = (value ? value->owner : NULL);
+    jsf_begin_execution(scope);
+    char * result = JSF_ValueToJson_impl(value);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT char * JSF_ValueToCString(JSFValue *value)
+{
+    JSFRuntime *scope = (value ? value->owner : NULL);
+    jsf_begin_execution(scope);
+    char * result = JSF_ValueToCString_impl(value);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_ValueArrayLength(JSFValue *value)
+{
+    JSFRuntime *scope = (value ? value->owner : NULL);
+    jsf_begin_execution(scope);
+    int32_t result = JSF_ValueArrayLength_impl(value);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT JSFValue * JSF_ValueArrayGet(JSFValue *value, uint32_t index)
+{
+    JSFRuntime *scope = (value ? value->owner : NULL);
+    jsf_begin_execution(scope);
+    JSFValue * result = JSF_ValueArrayGet_impl(value, index);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_ValueArraySet(JSFValue *value, uint32_t index, JSFValue *element)
+{
+    JSFRuntime *scope = (value ? value->owner : NULL);
+    jsf_begin_execution(scope);
+    int32_t result = JSF_ValueArraySet_impl(value, index, element);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT JSFValue * JSF_ValueObjectGet(JSFValue *value, const char *key)
+{
+    JSFRuntime *scope = (value ? value->owner : NULL);
+    jsf_begin_execution(scope);
+    JSFValue * result = JSF_ValueObjectGet_impl(value, key);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT JSFValue * JSF_ValueObjectGetJson(JSFValue *value, const char *key)
+{
+    JSFRuntime *scope = (value ? value->owner : NULL);
+    jsf_begin_execution(scope);
+    JSFValue * result = JSF_ValueObjectGetJson_impl(value, key);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_ValueObjectSet(JSFValue *value, const char *key, JSFValue *property)
+{
+    JSFRuntime *scope = (value ? value->owner : NULL);
+    jsf_begin_execution(scope);
+    int32_t result = JSF_ValueObjectSet_impl(value, key, property);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_ValueObjectSetJson(JSFValue *value, const char *key, JSFValue *property)
+{
+    JSFRuntime *scope = (value ? value->owner : NULL);
+    jsf_begin_execution(scope);
+    int32_t result = JSF_ValueObjectSetJson_impl(value, key, property);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_RuntimeResolveDartFuture(JSFRuntime *runtime, int32_t future_id, const char *result_json, int32_t is_error)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    int32_t result = JSF_RuntimeResolveDartFuture_impl(runtime, future_id, result_json, is_error);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_RuntimeResolveDartFutureValue(JSFRuntime *runtime, int32_t future_id, JSFValue *value, int32_t is_error)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    int32_t result = JSF_RuntimeResolveDartFutureValue_impl(runtime, future_id, value, is_error);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_RuntimeExecutePendingJobsMax(JSFRuntime *runtime, int32_t max_jobs)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    int32_t result = JSF_RuntimeExecutePendingJobsMax_impl(runtime, max_jobs);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_RegisterDartFunction(JSFRuntime *runtime, const char *name, JSFDartFunction callback, JSFDartFreeFunction free_result, void *opaque)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    int32_t result = JSF_RegisterDartFunction_impl(runtime, name, callback, free_result, opaque);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_RegisterDartFunctionJson(JSFRuntime *runtime, const char *name, JSFDartFunction callback, JSFDartFreeFunction free_result, void *opaque)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    int32_t result = JSF_RegisterDartFunctionJson_impl(runtime, name, callback, free_result, opaque);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_RegisterDartHandleFunction(JSFRuntime *runtime, const char *name, JSFDartHandleFunction callback, void *opaque)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    int32_t result = JSF_RegisterDartHandleFunction_impl(runtime, name, callback, opaque);
+    jsf_end_execution(scope);
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t JSF_RegisterDartHandleFunctionJson(JSFRuntime *runtime, const char *name, JSFDartHandleFunction callback, void *opaque)
+{
+    JSFRuntime *scope = runtime;
+    jsf_begin_execution(scope);
+    int32_t result = JSF_RegisterDartHandleFunctionJson_impl(runtime, name, callback, opaque);
+    jsf_end_execution(scope);
+    return result;
 }

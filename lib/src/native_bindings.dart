@@ -2,9 +2,19 @@
 
 import 'dart:ffi' as ffi;
 
+/// Internal notification for JavaScript jobs queued by handle operations.
+abstract class NativeRuntimeOwner {
+  void schedulePendingJobs();
+}
+
 final class JSFRuntime extends ffi.Opaque {}
 
 final class JSFValue extends ffi.Opaque {}
+
+typedef _AllocArrayBufferNative = ffi.Pointer<JSFValue> Function(
+    ffi.Pointer<JSFRuntime>, ffi.Size, ffi.Pointer<ffi.Pointer<ffi.Uint8>>);
+typedef _AllocArrayBufferDart = ffi.Pointer<JSFValue> Function(
+    ffi.Pointer<JSFRuntime>, int, ffi.Pointer<ffi.Pointer<ffi.Uint8>>);
 
 typedef DartFunctionNative = ffi.Pointer<ffi.Char> Function(
   ffi.Pointer<ffi.Void>,
@@ -26,7 +36,53 @@ class NativeJsfBindings {
   NativeJsfBindings(ffi.DynamicLibrary library)
       : _lookup = library.lookup,
         JSF_RuntimeFreePtr = library.lookup('JSF_RuntimeFree'),
-        JSF_ValueFreePtr = library.lookup('JSF_ValueFree');
+        JSF_ValueFreePtr = library.lookup('JSF_ValueFree') {
+    if (!library.providesSymbol('JSF_ABIVersion') || JSF_ABIVersion() != 2) {
+      throw StateError(
+          'JSF native ABI mismatch: expected ABI 2. Rebuild the native library shipped with jsf 1.2.0.');
+    }
+  }
+
+  late final JSF_ABIVersion =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>('JSF_ABIVersion')
+          .asFunction<int Function()>();
+  late final JSF_EngineVersion =
+      _lookup<ffi.NativeFunction<ffi.Pointer<ffi.Char> Function()>>(
+              'JSF_EngineVersion')
+          .asFunction<ffi.Pointer<ffi.Char> Function()>();
+  late final JSF_ValueNewExceptionJson = _lookup<
+          ffi.NativeFunction<
+              ffi.Pointer<JSFValue> Function(ffi.Pointer<JSFRuntime>,
+                  ffi.Pointer<ffi.Char>)>>('JSF_ValueNewExceptionJson')
+      .asFunction<
+          ffi.Pointer<JSFValue> Function(
+              ffi.Pointer<JSFRuntime>, ffi.Pointer<ffi.Char>)>();
+
+  late final JSF_RuntimeSetRejectionTracking = _lookup<
+          ffi.NativeFunction<
+              ffi.Void Function(ffi.Pointer<JSFRuntime>,
+                  ffi.Int32)>>('JSF_RuntimeSetRejectionTracking')
+      .asFunction<void Function(ffi.Pointer<JSFRuntime>, int)>();
+  late final JSF_RuntimeTakeRejection = _lookup<
+          ffi.NativeFunction<
+              ffi.Pointer<JSFValue> Function(
+                  ffi.Pointer<JSFRuntime>)>>('JSF_RuntimeTakeRejection')
+      .asFunction<ffi.Pointer<JSFValue> Function(ffi.Pointer<JSFRuntime>)>();
+  late final JSF_ValueObservePromise =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<JSFValue>)>>(
+              'JSF_ValueObservePromise')
+          .asFunction<int Function(ffi.Pointer<JSFValue>)>();
+  late final JSF_RuntimeUnregisterCallback = _lookup<
+          ffi.NativeFunction<
+              ffi.Int32 Function(ffi.Pointer<JSFRuntime>,
+                  ffi.Pointer<ffi.Void>)>>('JSF_RuntimeUnregisterCallback')
+      .asFunction<
+          int Function(ffi.Pointer<JSFRuntime>, ffi.Pointer<ffi.Void>)>();
+  late final JSF_RuntimeStatistics = _lookup<
+          ffi.NativeFunction<
+              ffi.Pointer<ffi.Char> Function(
+                  ffi.Pointer<JSFRuntime>)>>('JSF_RuntimeStatistics')
+      .asFunction<ffi.Pointer<ffi.Char> Function(ffi.Pointer<JSFRuntime>)>();
 
   final ffi.Pointer<T> Function<T extends ffi.NativeType>(String symbolName)
       _lookup;
@@ -79,6 +135,12 @@ class NativeJsfBindings {
           ffi.NativeFunction<
               ffi.Pointer<ffi.Char> Function(
                   ffi.Pointer<JSFRuntime>)>>('JSF_RuntimeLastError')
+      .asFunction<ffi.Pointer<ffi.Char> Function(ffi.Pointer<JSFRuntime>)>();
+
+  late final JSF_RuntimeLastErrorJson = _lookup<
+          ffi.NativeFunction<
+              ffi.Pointer<ffi.Char> Function(
+                  ffi.Pointer<JSFRuntime>)>>('JSF_RuntimeLastErrorJson')
       .asFunction<ffi.Pointer<ffi.Char> Function(ffi.Pointer<JSFRuntime>)>();
 
   late final JSF_RuntimeRegisterModule = _lookup<
@@ -142,10 +204,26 @@ class NativeJsfBindings {
           ffi.Pointer<JSFValue> Function(
               ffi.Pointer<JSFRuntime>, ffi.Pointer<ffi.Char>)>();
 
+  late final JSF_GetGlobalJson = _lookup<
+          ffi.NativeFunction<
+              ffi.Pointer<JSFValue> Function(ffi.Pointer<JSFRuntime>,
+                  ffi.Pointer<ffi.Char>)>>('JSF_GetGlobalJson')
+      .asFunction<
+          ffi.Pointer<JSFValue> Function(
+              ffi.Pointer<JSFRuntime>, ffi.Pointer<ffi.Char>)>();
+
   late final JSF_SetGlobal = _lookup<
           ffi.NativeFunction<
               ffi.Int32 Function(ffi.Pointer<JSFRuntime>, ffi.Pointer<ffi.Char>,
                   ffi.Pointer<JSFValue>)>>('JSF_SetGlobal')
+      .asFunction<
+          int Function(ffi.Pointer<JSFRuntime>, ffi.Pointer<ffi.Char>,
+              ffi.Pointer<JSFValue>)>();
+
+  late final JSF_SetGlobalJson = _lookup<
+          ffi.NativeFunction<
+              ffi.Int32 Function(ffi.Pointer<JSFRuntime>, ffi.Pointer<ffi.Char>,
+                  ffi.Pointer<JSFValue>)>>('JSF_SetGlobalJson')
       .asFunction<
           int Function(ffi.Pointer<JSFRuntime>, ffi.Pointer<ffi.Char>,
               ffi.Pointer<JSFValue>)>();
@@ -196,6 +274,22 @@ class NativeJsfBindings {
               ffi.Pointer<ffi.NativeFunction<DartFreeNative>>,
               ffi.Pointer<ffi.Void>)>();
 
+  late final JSF_RegisterDartFunctionJson = _lookup<
+          ffi.NativeFunction<
+              ffi.Int32 Function(
+                  ffi.Pointer<JSFRuntime>,
+                  ffi.Pointer<ffi.Char>,
+                  ffi.Pointer<ffi.NativeFunction<DartFunctionNative>>,
+                  ffi.Pointer<ffi.NativeFunction<DartFreeNative>>,
+                  ffi.Pointer<ffi.Void>)>>('JSF_RegisterDartFunctionJson')
+      .asFunction<
+          int Function(
+              ffi.Pointer<JSFRuntime>,
+              ffi.Pointer<ffi.Char>,
+              ffi.Pointer<ffi.NativeFunction<DartFunctionNative>>,
+              ffi.Pointer<ffi.NativeFunction<DartFreeNative>>,
+              ffi.Pointer<ffi.Void>)>();
+
   late final JSF_RegisterDartHandleFunction = _lookup<
           ffi.NativeFunction<
               ffi.Int32 Function(
@@ -203,6 +297,20 @@ class NativeJsfBindings {
                   ffi.Pointer<ffi.Char>,
                   ffi.Pointer<ffi.NativeFunction<DartHandleFunctionNative>>,
                   ffi.Pointer<ffi.Void>)>>('JSF_RegisterDartHandleFunction')
+      .asFunction<
+          int Function(
+              ffi.Pointer<JSFRuntime>,
+              ffi.Pointer<ffi.Char>,
+              ffi.Pointer<ffi.NativeFunction<DartHandleFunctionNative>>,
+              ffi.Pointer<ffi.Void>)>();
+
+  late final JSF_RegisterDartHandleFunctionJson = _lookup<
+          ffi.NativeFunction<
+              ffi.Int32 Function(
+                  ffi.Pointer<JSFRuntime>,
+                  ffi.Pointer<ffi.Char>,
+                  ffi.Pointer<ffi.NativeFunction<DartHandleFunctionNative>>,
+                  ffi.Pointer<ffi.Void>)>>('JSF_RegisterDartHandleFunctionJson')
       .asFunction<
           int Function(
               ffi.Pointer<JSFRuntime>,
@@ -354,10 +462,26 @@ class NativeJsfBindings {
           ffi.Pointer<JSFValue> Function(
               ffi.Pointer<JSFValue>, ffi.Pointer<ffi.Char>)>();
 
+  late final JSF_ValueObjectGetJson = _lookup<
+          ffi.NativeFunction<
+              ffi.Pointer<JSFValue> Function(ffi.Pointer<JSFValue>,
+                  ffi.Pointer<ffi.Char>)>>('JSF_ValueObjectGetJson')
+      .asFunction<
+          ffi.Pointer<JSFValue> Function(
+              ffi.Pointer<JSFValue>, ffi.Pointer<ffi.Char>)>();
+
   late final JSF_ValueObjectSet = _lookup<
           ffi.NativeFunction<
               ffi.Int32 Function(ffi.Pointer<JSFValue>, ffi.Pointer<ffi.Char>,
                   ffi.Pointer<JSFValue>)>>('JSF_ValueObjectSet')
+      .asFunction<
+          int Function(ffi.Pointer<JSFValue>, ffi.Pointer<ffi.Char>,
+              ffi.Pointer<JSFValue>)>();
+
+  late final JSF_ValueObjectSetJson = _lookup<
+          ffi.NativeFunction<
+              ffi.Int32 Function(ffi.Pointer<JSFValue>, ffi.Pointer<ffi.Char>,
+                  ffi.Pointer<JSFValue>)>>('JSF_ValueObjectSetJson')
       .asFunction<
           int Function(ffi.Pointer<JSFValue>, ffi.Pointer<ffi.Char>,
               ffi.Pointer<JSFValue>)>();
@@ -377,6 +501,80 @@ class NativeJsfBindings {
       _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Char>)>>(
               'JSF_FreeCString')
           .asFunction<void Function(ffi.Pointer<ffi.Char>)>();
+  late final JSF_RuntimeExecutePendingJobsMax = _lookup<
+          ffi.NativeFunction<
+              ffi.Int32 Function(ffi.Pointer<JSFRuntime>,
+                  ffi.Int32)>>('JSF_RuntimeExecutePendingJobsMax')
+      .asFunction<int Function(ffi.Pointer<JSFRuntime>, int)>();
+  late final JSF_ValueNewArrayBuffer = _lookup<
+          ffi.NativeFunction<
+              ffi.Pointer<JSFValue> Function(ffi.Pointer<JSFRuntime>,
+                  ffi.Pointer<ffi.Uint8>, ffi.Size)>>('JSF_ValueNewArrayBuffer')
+      .asFunction<
+          ffi.Pointer<JSFValue> Function(
+              ffi.Pointer<JSFRuntime>, ffi.Pointer<ffi.Uint8>, int)>();
+  // Older libraries retain the existing copy path. Resolve only once.
+  late final JSF_ValueAllocArrayBuffer = _lookupAllocArrayBuffer();
+
+  _AllocArrayBufferDart? _lookupAllocArrayBuffer() {
+    try {
+      return _lookup<ffi.NativeFunction<_AllocArrayBufferNative>>(
+              'JSF_ValueAllocArrayBuffer')
+          .asFunction<_AllocArrayBufferDart>();
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  late final JSF_ValueArrayBufferData = _lookup<
+          ffi.NativeFunction<
+              ffi.Pointer<ffi.Uint8> Function(ffi.Pointer<JSFValue>,
+                  ffi.Pointer<ffi.Size>)>>('JSF_ValueArrayBufferData')
+      .asFunction<
+          ffi.Pointer<ffi.Uint8> Function(
+              ffi.Pointer<JSFValue>, ffi.Pointer<ffi.Size>)>();
+  late final JSF_RuntimeResolveDartFutureValue = _lookup<
+          ffi.NativeFunction<
+              ffi.Int32 Function(
+                  ffi.Pointer<JSFRuntime>,
+                  ffi.Int32,
+                  ffi.Pointer<JSFValue>,
+                  ffi.Int32)>>('JSF_RuntimeResolveDartFutureValue')
+      .asFunction<
+          int Function(
+              ffi.Pointer<JSFRuntime>, int, ffi.Pointer<JSFValue>, int)>();
+
+  late final JSF_EvalLen = _lookup<
+          ffi.NativeFunction<
+              ffi.Pointer<JSFValue> Function(
+                  ffi.Pointer<JSFRuntime>,
+                  ffi.Pointer<ffi.Char>,
+                  ffi.Size,
+                  ffi.Pointer<ffi.Char>,
+                  ffi.Int32)>>('JSF_EvalLen')
+      .asFunction<
+          ffi.Pointer<JSFValue> Function(ffi.Pointer<JSFRuntime>,
+              ffi.Pointer<ffi.Char>, int, ffi.Pointer<ffi.Char>, int)>();
+  late final JSF_LoadModuleLen = _lookup<
+          ffi.NativeFunction<
+              ffi.Pointer<JSFValue> Function(
+                  ffi.Pointer<JSFRuntime>,
+                  ffi.Pointer<ffi.Char>,
+                  ffi.Pointer<ffi.Char>,
+                  ffi.Size)>>('JSF_LoadModuleLen')
+      .asFunction<
+          ffi.Pointer<JSFValue> Function(ffi.Pointer<JSFRuntime>,
+              ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Char>, int)>();
+  late final JSF_RuntimeRegisterModuleLen = _lookup<
+          ffi.NativeFunction<
+              ffi.Int32 Function(
+                  ffi.Pointer<JSFRuntime>,
+                  ffi.Pointer<ffi.Char>,
+                  ffi.Pointer<ffi.Char>,
+                  ffi.Size)>>('JSF_RuntimeRegisterModuleLen')
+      .asFunction<
+          int Function(ffi.Pointer<JSFRuntime>, ffi.Pointer<ffi.Char>,
+              ffi.Pointer<ffi.Char>, int)>();
 }
 
 const int jsfValueUndefined = 0;
@@ -390,6 +588,7 @@ const int jsfValueArray = 7;
 const int jsfValueObject = 8;
 const int jsfValueFunction = 9;
 const int jsfValuePromise = 10;
+const int jsfValueArrayBuffer = 11;
 
 const int jsfPromisePending = 0;
 const int jsfPromiseFulfilled = 1;

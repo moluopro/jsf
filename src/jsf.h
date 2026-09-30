@@ -22,6 +22,8 @@ typedef struct JSModuleDef JSModuleDef;
 
 #if _WIN32
 #define FFI_PLUGIN_EXPORT __declspec(dllexport)
+#elif defined(__APPLE__)
+#define FFI_PLUGIN_EXPORT __attribute__((visibility("default"), used))
 #elif defined(__GNUC__) || defined(__clang__)
 #define FFI_PLUGIN_EXPORT __attribute__((visibility("default")))
 #else
@@ -52,10 +54,14 @@ typedef enum JSFValueType
     JSF_VALUE_OBJECT = 8,
     JSF_VALUE_FUNCTION = 9,
     JSF_VALUE_PROMISE = 10,
+    JSF_VALUE_ARRAY_BUFFER = 11,
     JSF_VALUE_UNKNOWN = 100
 } JSFValueType;
 
 FFI_PLUGIN_EXPORT JSFRuntime *JSF_RuntimeNew(void);
+/* Serialize calls per runtime. All owned JSFValue handles must be freed first.
+ * Freeing a runtime during execution or with live handles is rejected; inspect
+ * JSF_RuntimeLastError and retry once the outer call/handle lifetime ends. */
 FFI_PLUGIN_EXPORT void JSF_RuntimeFree(JSFRuntime *runtime);
 FFI_PLUGIN_EXPORT void JSF_RuntimeSetMemoryLimit(JSFRuntime *runtime, size_t limit);
 FFI_PLUGIN_EXPORT void JSF_RuntimeSetMaxStackSize(JSFRuntime *runtime, size_t stack_size);
@@ -105,3 +111,48 @@ FFI_PLUGIN_EXPORT int32_t JSF_ValueObjectSet(JSFValue *value, const char *key, J
 FFI_PLUGIN_EXPORT int32_t JSF_ValuePromiseState(JSFValue *value);
 FFI_PLUGIN_EXPORT JSFValue *JSF_ValuePromiseResult(JSFValue *value);
 FFI_PLUGIN_EXPORT void JSF_FreeCString(char *value);
+
+FFI_PLUGIN_EXPORT int32_t JSF_RuntimeExecutePendingJobsMax(JSFRuntime *runtime, int32_t max_jobs);
+
+FFI_PLUGIN_EXPORT const char *JSF_RuntimeLastErrorJson(JSFRuntime *runtime);
+
+FFI_PLUGIN_EXPORT JSFValue *JSF_GetGlobalJson(JSFRuntime *runtime, const char *name);
+
+FFI_PLUGIN_EXPORT int32_t JSF_SetGlobalJson(JSFRuntime *runtime, const char *name, JSFValue *value);
+
+FFI_PLUGIN_EXPORT int32_t JSF_RegisterDartFunctionJson(JSFRuntime *runtime, const char *name, JSFDartFunction callback, JSFDartFreeFunction free_result, void *opaque);
+
+FFI_PLUGIN_EXPORT int32_t JSF_RegisterDartHandleFunctionJson(JSFRuntime *runtime, const char *name, JSFDartHandleFunction callback, void *opaque);
+
+FFI_PLUGIN_EXPORT JSFValue *JSF_ValueObjectGetJson(JSFValue *value, const char *key);
+
+FFI_PLUGIN_EXPORT int32_t JSF_ValueObjectSetJson(JSFValue *value, const char *key, JSFValue *property);
+
+FFI_PLUGIN_EXPORT JSFValue *JSF_ValueNewArrayBuffer(JSFRuntime *runtime, const uint8_t *bytes, size_t length);
+/* Allocates a zero-filled, QuickJS-owned ArrayBuffer and returns its writable
+ * storage in data. On failure, returns NULL and sets *data to NULL.
+ * The storage counts toward the runtime memory limit. Fill it synchronously
+ * before exposing the value to JS; never retain the pointer across JS calls,
+ * transfer/detachment, value release or runtime destruction. Do not free it. */
+FFI_PLUGIN_EXPORT JSFValue *JSF_ValueAllocArrayBuffer(JSFRuntime *runtime, size_t length, uint8_t **data);
+
+FFI_PLUGIN_EXPORT const uint8_t *JSF_ValueArrayBufferData(JSFValue *value, size_t *length);
+
+FFI_PLUGIN_EXPORT int32_t JSF_RuntimeResolveDartFutureValue(JSFRuntime *runtime, int32_t future_id, JSFValue *value, int32_t is_error);
+
+FFI_PLUGIN_EXPORT int32_t JSF_RuntimeRegisterModuleLen(JSFRuntime *runtime, const char *module_name, const char *module_source, size_t source_len);
+
+FFI_PLUGIN_EXPORT JSFValue *JSF_EvalLen(JSFRuntime *runtime, const char *code, size_t code_len, const char *filename, int32_t module);
+
+FFI_PLUGIN_EXPORT JSFValue *JSF_LoadModuleLen(JSFRuntime *runtime, const char *module_name, const char *module_source, size_t source_len);
+
+/* ABI 2 adds checked runtime ownership, per-call budgets and callback errors. */
+FFI_PLUGIN_EXPORT int32_t JSF_ABIVersion(void);
+FFI_PLUGIN_EXPORT const char *JSF_EngineVersion(void);
+FFI_PLUGIN_EXPORT JSFValue *JSF_ValueNewExceptionJson(JSFRuntime *runtime, const char *json);
+
+FFI_PLUGIN_EXPORT void JSF_RuntimeSetRejectionTracking(JSFRuntime *runtime, int32_t enabled);
+FFI_PLUGIN_EXPORT JSFValue *JSF_RuntimeTakeRejection(JSFRuntime *runtime);
+FFI_PLUGIN_EXPORT int32_t JSF_ValueObservePromise(JSFValue *value);
+FFI_PLUGIN_EXPORT int32_t JSF_RuntimeUnregisterCallback(JSFRuntime *runtime, void *opaque);
+FFI_PLUGIN_EXPORT char *JSF_RuntimeStatistics(JSFRuntime *runtime);

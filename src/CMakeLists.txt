@@ -23,6 +23,7 @@ set(QUICKJS_SOURCES
 set(JSF_RELEASE_C_FLAGS)
 set(JSF_RELEASE_LINK_FLAGS)
 set(JSF_IS_DESKTOP_BUILD OFF)
+option(JSF_NATIVE_CPU "Optimize for this machine CPU (non-portable binaries)" OFF)
 
 if(WIN32
     OR CMAKE_SYSTEM_NAME STREQUAL "Darwin"
@@ -38,9 +39,9 @@ elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang")
   list(APPEND JSF_RELEASE_LINK_FLAGS -flto)
 endif()
 
-if(JSF_IS_DESKTOP_BUILD AND CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
+if(JSF_NATIVE_CPU AND JSF_IS_DESKTOP_BUILD AND CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
   list(APPEND JSF_RELEASE_C_FLAGS -mcpu=native)
-elseif(JSF_IS_DESKTOP_BUILD AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+elseif(JSF_NATIVE_CPU AND JSF_IS_DESKTOP_BUILD AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   list(APPEND JSF_RELEASE_C_FLAGS -march=native)
 endif()
 
@@ -59,6 +60,7 @@ endif()
 if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
   list(APPEND JSF_RELEASE_LINK_FLAGS
     -static-libgcc
+    -static
     -Wl,--export-all-symbols
   )
 endif()
@@ -125,6 +127,7 @@ target_include_directories(jsf PUBLIC
 
 target_compile_definitions(jsf PUBLIC
   DART_SHARED_LIB
+  CONFIG_VERSION="${QUICKJS_VERSION}"
 )
 
 if(NOT WIN32)
@@ -144,4 +147,15 @@ if(ANDROID)
       LINK_FLAGS " -Wl,-z,max-page-size=16384"
     )
   endif()
+endif()
+
+option(JSF_BUILD_TESTS "Build native ABI regression tests" OFF)
+if(JSF_BUILD_TESTS)
+  enable_testing()
+  add_executable(jsf_native_abi_test "${JSF_SRC_DIR}/../test/native_abi_test.c")
+  target_link_libraries(jsf_native_abi_test PRIVATE jsf)
+  set_target_properties(jsf_native_abi_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:jsf>"
+  )
+  add_test(NAME jsf_native_abi COMMAND jsf_native_abi_test)
 endif()
