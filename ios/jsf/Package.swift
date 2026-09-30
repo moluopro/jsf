@@ -2,6 +2,11 @@
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
+import Foundation
+
+let quickjsVersion = try String(contentsOf: URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().appendingPathComponent("../../src/quickjs/VERSION"),
+    encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
 
 let package = Package(
     name: "jsf",
@@ -23,14 +28,15 @@ let package = Package(
             cSettings: [
                 .headerSearchPath("include/jsf"),
                 .define("_GNU_SOURCE", to: "1"),
-                .define("CONFIG_VERSION", to: "\"2026-06-04\""),
+                .define("CONFIG_VERSION", to: "\"\(quickjsVersion)\""),
                 .unsafeFlags([
                     "-fwrapv",
                     "-Wno-shorten-64-to-32",
                     "-Wno-conditional-uninitialized",
                     "-Wno-comma"
                 ])
-            ]
+            ],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-u", "-Xlinker", "_JSF_RuntimeNew"])]
         )
     ]
 )

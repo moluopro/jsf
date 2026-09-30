@@ -36,7 +36,7 @@ A high performance JavaScript engine, available out of the box in Flutter.
     'Classes/quickjs/quickjs.c'
   ]
   s.dependency 'Flutter'
-  s.platform = :ios, '12.0'
+  s.platform = :ios, '13.0'
 
   s.swift_version = '5.0'
 end

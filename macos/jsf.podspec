@@ -43,6 +43,6 @@ A high performance JavaScript engine, available out of the box in Flutter.
 
   s.dependency 'FlutterMacOS'
 
-  s.platform = :osx, '10.11'
+  s.platform = :osx, '10.15'
   s.swift_version = '5.0'
 end
