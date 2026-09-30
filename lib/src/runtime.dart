@@ -3,6 +3,8 @@
  * Github: https://github.com/moluopro
  */
 
+import 'diagnostics.dart';
+
 /// An abstract class that defines the interface for a runtime environment
 /// capable of evaluating and executing code, as well as managing resources.
 abstract class Runtime {
@@ -29,4 +31,33 @@ abstract class Runtime {
   /// This should be called when the runtime is no longer in use to prevent
   /// resource leaks and ensure proper cleanup.
   void dispose();
+}
+
+/// Complete managed-runtime contract, preserving the smaller [Runtime] interface.
+abstract interface class JsRuntimeApi<V> implements Runtime {
+  Future<dynamic> evalAsync(String code,
+      {String filename = '<eval>', bool module = false, Duration? timeout});
+  V evalValue(String code, {String filename = '<eval>', bool module = false});
+  V callValue(V function, [List<Object?> arguments = const []]);
+  Future<dynamic> awaitValue(V value, {Duration? timeout});
+  V newValue(Object? value);
+  V getGlobalValue(String name);
+  JsCallbackRegistration registerFunction(
+      String name, Object? Function(List<Object?> arguments) callback);
+  JsCallbackRegistration registerHandleFunction(
+      String name, Object? Function(List<V> arguments) callback);
+  bool unregisterFunction(String name);
+  void loadModule(String name, String source);
+  V loadModuleValue(String name, String source);
+  void registerModule(String name, String source);
+  void registerModules(Map<String, String> modules);
+  void registerImportMap(Map<String, String> imports);
+  void clearModules();
+  int executePendingJobs();
+  void setMemoryLimit(int bytes);
+  void setMaxStackSize(int bytes);
+  void setTimeout(Duration timeout);
+  void clearTimeout();
+  JsRuntimeCapabilities get capabilities;
+  JsRuntimeStatistics get statistics;
 }

@@ -20,4 +20,7 @@ export 'src/runtime.dart';
 export 'src/runtime_options.dart';
 export 'src/value.dart'
     if (dart.library.js_interop) 'src/value_web.dart'
-    if (dart.library.html) 'src/value_web.dart';
+    if (dart.library.html) 'src/value_web.dart' show JsValue;
+
+export 'src/fetch.dart';
+export 'src/diagnostics.dart';
