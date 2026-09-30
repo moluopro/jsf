@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:collection';
 import 'dart:typed_data';
 
 /// Sentinel used when a Dart value represents JavaScript `undefined`.
@@ -87,8 +88,8 @@ class JsTypedArray {
   /// JavaScript constructor name, for example `Uint8Array`.
   final String name;
 
-  /// Numeric values copied from the JavaScript typed array.
-  final List<num> values;
+  /// Values copied from the typed array, including BigInt and nonfinite numbers.
+  final List<Object?> values;
 
   @override
   String toString() => '$name(${values.length})';
@@ -101,6 +102,14 @@ class JsTypedArray {
 
   @override
   int get hashCode => Object.hash(name, Object.hashAll(values));
+}
+
+/// A snapshot of a JavaScript DataView's visible bytes.
+class JsDataView {
+  JsDataView(List<int> bytes) : bytes = Uint8List.fromList(bytes);
+  final Uint8List bytes;
+  @override
+  String toString() => 'DataView(${bytes.length})';
 }
 
 /// Marker returned when a JavaScript value cannot be represented as a Dart
@@ -142,6 +151,13 @@ Object? decodeJsTransferValue(Object? value) {
   if (value is Map) {
     final type = value[r'$jsf.type'];
     switch (type) {
+      case 'Object':
+        return {
+          for (final entry in value['entries'] as List)
+            entry[0] as String: decodeJsTransferValue(entry[1])
+        };
+      case 'DataView':
+        return JsDataView((value['bytes'] as List).cast<int>());
       case 'Undefined':
         return jsUndefined;
       case 'ArrayHole':
@@ -185,7 +201,9 @@ Object? decodeJsTransferValue(Object? value) {
       case 'TypedArray':
         return JsTypedArray(
           value['name'] as String? ?? 'TypedArray',
-          (value['values'] as List? ?? const []).cast<num>(),
+          (value['values'] as List? ?? const [])
+              .map(decodeJsTransferValue)
+              .toList(),
         );
       case 'Symbol':
       case 'Function':
@@ -207,87 +225,124 @@ Object? decodeJsTransferValue(Object? value) {
 ///
 /// This is a snapshot conversion. Use `JsValue` handles when JavaScript object
 /// identity, prototypes, functions, or host objects must be preserved.
-Object? encodeJsTransferValue(Object? value) {
-  if (value == null || value is bool || value is String) {
-    return value;
-  }
-  if (value is int) {
-    return value;
-  }
-  if (value is double) {
-    if (value.isNaN) {
-      return {r'$jsf.type': 'Number', 'value': 'NaN'};
+Object? encodeJsTransferValue(Object? value) =>
+    _TransferEncoder().encode(value);
+
+class _TransferEncoder {
+  final Set<Object> _active = HashSet.identity();
+  Object? encode(Object? value) {
+    final tracked = value is Iterable || value is Map;
+    if (tracked && !_active.add(value!)) {
+      throw ArgumentError(
+          'Circular Dart value; use JsValue handles for object identity.');
     }
-    if (value == double.infinity) {
-      return {r'$jsf.type': 'Number', 'value': 'Infinity'};
+    try {
+      return _encode(value);
+    } finally {
+      if (tracked) _active.remove(value);
     }
-    if (value == double.negativeInfinity) {
-      return {r'$jsf.type': 'Number', 'value': '-Infinity'};
+  }
+
+  Object? _encode(Object? value) {
+    if (value == null || value is bool || value is String) {
+      return value;
     }
-    if (value == 0 && value.isNegative) {
-      return {r'$jsf.type': 'Number', 'value': '-0'};
+    if (value is int) {
+      if (value > 9007199254740991 || value < -9007199254740991) {
+        return {r'$jsf.type': 'BigInt', 'value': value.toString()};
+      }
+      return value;
     }
-    return value;
-  }
-  if (value is JsUndefined) {
-    return {r'$jsf.type': 'Undefined'};
-  }
-  if (value is JsArrayHole) {
-    return {r'$jsf.type': 'ArrayHole'};
-  }
-  if (value is BigInt) {
-    return {r'$jsf.type': 'BigInt', 'value': value.toString()};
-  }
-  if (value is DateTime) {
-    return {
-      r'$jsf.type': 'Date',
-      'value': value.toUtc().toIso8601String(),
-    };
-  }
-  if (value is JsRegExp) {
-    return {
-      r'$jsf.type': 'RegExp',
-      'source': value.source,
-      'flags': value.flags
-    };
-  }
-  if (value is JsErrorDetails) {
-    return {
-      r'$jsf.type': 'Error',
-      'name': value.name,
-      'message': value.message,
-      if (value.stack != null) 'stack': value.stack,
-    };
-  }
-  if (value is Uint8List) {
-    return {r'$jsf.type': 'ArrayBuffer', 'bytes': value.toList()};
-  }
-  if (value is JsTypedArray) {
-    return {
-      r'$jsf.type': 'TypedArray',
-      'name': value.name,
-      'values': value.values,
-    };
-  }
-  if (value is Set) {
-    return {
-      r'$jsf.type': 'Set',
-      'values': value.map(encodeJsTransferValue).toList(growable: false),
-    };
-  }
-  if (value is Iterable) {
-    return value.map(encodeJsTransferValue).toList(growable: false);
-  }
-  if (value is Map) {
-    return value.map(
-      (key, item) => MapEntry(key.toString(), encodeJsTransferValue(item)),
+    if (value is double) {
+      if (value.isNaN) {
+        return {r'$jsf.type': 'Number', 'value': 'NaN'};
+      }
+      if (value == double.infinity) {
+        return {r'$jsf.type': 'Number', 'value': 'Infinity'};
+      }
+      if (value == double.negativeInfinity) {
+        return {r'$jsf.type': 'Number', 'value': '-Infinity'};
+      }
+      if (value == 0 && value.isNegative) {
+        return {r'$jsf.type': 'Number', 'value': '-0'};
+      }
+      return value;
+    }
+    if (value is JsUndefined) {
+      return {r'$jsf.type': 'Undefined'};
+    }
+    if (value is JsArrayHole) {
+      return {r'$jsf.type': 'ArrayHole'};
+    }
+    if (value is BigInt) {
+      return {r'$jsf.type': 'BigInt', 'value': value.toString()};
+    }
+    if (value is DateTime) {
+      return {
+        r'$jsf.type': 'Date',
+        'value': value.toUtc().toIso8601String(),
+      };
+    }
+    if (value is JsRegExp) {
+      return {
+        r'$jsf.type': 'RegExp',
+        'source': value.source,
+        'flags': value.flags
+      };
+    }
+    if (value is JsErrorDetails) {
+      return {
+        r'$jsf.type': 'Error',
+        'name': value.name,
+        'message': value.message,
+        if (value.stack != null) 'stack': value.stack,
+      };
+    }
+    if (value is JsDataView) {
+      return {r'$jsf.type': 'DataView', 'bytes': value.bytes.toList()};
+    }
+    if (value is Uint8List) {
+      return {r'$jsf.type': 'ArrayBuffer', 'bytes': value.toList()};
+    }
+    if (value is JsTypedArray) {
+      return {
+        r'$jsf.type': 'TypedArray',
+        'name': value.name,
+        'values': value.values.map(encode).toList(),
+      };
+    }
+    if (value is Set) {
+      return {
+        r'$jsf.type': 'Set',
+        'values': value.map(encode).toList(growable: false),
+      };
+    }
+    if (value is Iterable) {
+      return value.map(encode).toList(growable: false);
+    }
+    if (value is Map) {
+      if (value.keys.any((key) => key is! String)) {
+        return {
+          r'$jsf.type': 'Map',
+          'entries': value.entries
+              .map((e) => [encode(e.key), encode(e.value)])
+              .toList()
+        };
+      }
+      if (value.containsKey(r'$jsf.type')) {
+        return {
+          r'$jsf.type': 'Object',
+          'entries': value.entries.map((e) => [e.key, encode(e.value)]).toList()
+        };
+      }
+      return value.map((key, item) => MapEntry(key as String, encode(item)));
+    }
+    throw ArgumentError.value(
+      value,
+      'value',
+      'Unsupported JavaScript interop value type: ${value.runtimeType}.',
     );
   }
-  throw ArgumentError.value(
-    value,
-    'value',
-    'Unsupported JavaScript interop value type: ${value.runtimeType}.',
-  );
 }
 
 /// Encodes [value] as a JavaScript-compatible JSON transfer literal.

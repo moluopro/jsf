@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:ffi' as ffi;
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
@@ -15,13 +16,17 @@ class JsValue {
   JsValue._(
     this._bindings,
     this._runtime,
-    this._pointer, {
+    ffi.Pointer<JSFValue> pointer, {
     bool owned = true,
     Object? owner,
   })  : _owned = owned,
-        _owner = owner {
+        _owner = owner,
+        _state = _ValueState(_bindings, _runtime, pointer, owned) {
     if (_owned) {
-      _liveValues.putIfAbsent(_runtime.address, () => <JsValue>{}).add(this);
+      _liveValues
+          .putIfAbsent(_runtime.address, () => <_ValueState>{})
+          .add(_state);
+      _valueFinalizer.attach(this, _state, detach: this);
     }
   }
 
@@ -29,8 +34,9 @@ class JsValue {
   final ffi.Pointer<JSFRuntime> _runtime;
   final bool _owned;
   final Object? _owner;
-  ffi.Pointer<JSFValue> _pointer;
-  bool _runtimeDisposed = false;
+  final _ValueState _state;
+  ffi.Pointer<JSFValue> get _pointer => _state.pointer;
+  set _pointer(ffi.Pointer<JSFValue> value) => _state.pointer = value;
 
   /// Whether this handle has already been disposed or released.
   bool get isDisposed => _pointer == ffi.nullptr;
@@ -76,7 +82,9 @@ class JsValue {
       case jsfValueBigInt:
         return BigInt.parse(_readCString(_bindings.JSF_ValueToCString));
       case jsfValueString:
-        return _readCString(_bindings.JSF_ValueToCString);
+        return jsonDecode(_readCString(_bindings.JSF_ValueToJson));
+      case jsfValueArrayBuffer:
+        return toBytes();
       case jsfValueArray:
       case jsfValueObject:
       case jsfValueFunction:
@@ -119,18 +127,20 @@ class JsValue {
   JsValue getPropertyValue(String key) {
     _ensureAlive();
     return using((arena) {
-      final keyPtr = key.toNativeUtf8(allocator: arena).cast<ffi.Char>();
-      return _wrapOrThrow(_bindings.JSF_ValueObjectGet(_pointer, keyPtr));
+      final keyPtr =
+          jsonEncode(key).toNativeUtf8(allocator: arena).cast<ffi.Char>();
+      return _wrapOrThrow(_bindings.JSF_ValueObjectGetJson(_pointer, keyPtr));
     });
   }
 
   /// Sets an object property by string [key].
   void setPropertyValue(String key, JsValue value) {
     _ensureAlive();
-    value._ensureAlive();
+    _checkOwner(value);
     using((arena) {
-      final keyPtr = key.toNativeUtf8(allocator: arena).cast<ffi.Char>();
-      final result = _bindings.JSF_ValueObjectSet(
+      final keyPtr =
+          jsonEncode(key).toNativeUtf8(allocator: arena).cast<ffi.Char>();
+      final result = _bindings.JSF_ValueObjectSetJson(
         _pointer,
         keyPtr,
         value.nativePointer,
@@ -139,18 +149,21 @@ class JsValue {
         _throwLastError();
       }
     });
+    _notifyJobs();
   }
 
   /// Reads an array-like item by [index].
   JsValue getIndexValue(int index) {
     _ensureAlive();
+    RangeError.checkValueInInterval(index, 0, 4294967294, 'index');
     return _wrapOrThrow(_bindings.JSF_ValueArrayGet(_pointer, index));
   }
 
   /// Sets an array-like item by [index].
   void setIndexValue(int index, JsValue value) {
     _ensureAlive();
-    value._ensureAlive();
+    RangeError.checkValueInInterval(index, 0, 4294967294, 'index');
+    _checkOwner(value);
     final result = _bindings.JSF_ValueArraySet(
       _pointer,
       index,
@@ -159,6 +172,7 @@ class JsValue {
     if (result < 0) {
       _throwLastError();
     }
+    _notifyJobs();
   }
 
   /// Calls this value as a JavaScript function.
@@ -166,6 +180,10 @@ class JsValue {
   /// [thisValue] is used as JavaScript `this` when supplied.
   JsValue callWithValues(List<JsValue> arguments, {JsValue? thisValue}) {
     _ensureAlive();
+    if (thisValue != null) _checkOwner(thisValue);
+    for (final value in arguments) {
+      _checkOwner(value);
+    }
     final argv = calloc<ffi.Pointer<JSFValue>>(arguments.length);
     try {
       for (var i = 0; i < arguments.length; i++) {
@@ -182,6 +200,7 @@ class JsValue {
       );
     } finally {
       calloc.free(argv);
+      _notifyJobs();
     }
   }
 
@@ -229,7 +248,7 @@ class JsValue {
   ) {
     final result = read(_pointer);
     if (result == ffi.nullptr) {
-      throw JsException('Unable to convert JavaScript value.');
+      _throwLastError();
     }
     try {
       return result.cast<Utf8>().toDartString();
@@ -239,7 +258,7 @@ class JsValue {
   }
 
   void _ensureAlive() {
-    if (_runtimeDisposed) {
+    if (_state.runtimeDisposed) {
       throw StateError('JavaScript runtime has been disposed.');
     }
     if (_pointer == ffi.nullptr || _runtime == ffi.nullptr) {
@@ -247,18 +266,49 @@ class JsValue {
     }
   }
 
+  void _checkOwner(JsValue value) {
+    value._ensureAlive();
+    if (value._runtime != _runtime) {
+      throw ArgumentError('JavaScript value belongs to a different runtime.');
+    }
+  }
+
+  void _notifyJobs() {
+    final owner = _owner;
+    if (owner is NativeRuntimeOwner) owner.schedulePendingJobs();
+  }
+
   void _unregister() {
     if (!_owned) {
       return;
     }
     final values = _liveValues[_runtime.address];
-    values?.remove(this);
+    _valueFinalizer.detach(this);
+    values?.remove(_state);
     if (values != null && values.isEmpty) {
       _liveValues.remove(_runtime.address);
     }
   }
 
+  /// Copies an ArrayBuffer without expanding its bytes into transfer JSON.
+  Uint8List toBytes() {
+    _ensureAlive();
+    return using((arena) {
+      final length = arena<ffi.Size>();
+      final data = _bindings.JSF_ValueArrayBufferData(_pointer, length);
+      if (data == ffi.nullptr && length.value != 0) _throwLastError();
+      return length.value == 0
+          ? Uint8List(0)
+          : Uint8List.fromList(data.asTypedList(length.value));
+    });
+  }
+
   Never _throwLastError() {
+    final json = _bindings.JSF_RuntimeLastErrorJson(_runtime);
+    if (json != ffi.nullptr) {
+      throw JsException.fromDetails(
+          jsonDecode(json.cast<Utf8>().toDartString()));
+    }
     final error = _bindings.JSF_RuntimeLastError(_runtime);
     if (error == ffi.nullptr) {
       throw JsException('Unknown JavaScript error.');
@@ -270,25 +320,43 @@ class JsValue {
     if (pointer == ffi.nullptr) {
       _throwLastError();
     }
+    _notifyJobs();
     return wrapJsValue(_bindings, _runtime, pointer, owner: _owner);
   }
 }
 
-void disposeRuntimeValues(ffi.Pointer<JSFRuntime> runtime) {
-  final values = _liveValues.remove(runtime.address);
-  if (values == null) {
-    return;
-  }
-  for (final value in List<JsValue>.from(values)) {
-    value._runtimeDisposed = true;
-    if (value._pointer != ffi.nullptr && value._owned) {
-      value._bindings.JSF_ValueFree(value._pointer);
-      value._pointer = ffi.nullptr;
-    }
+class _ValueState {
+  _ValueState(this.bindings, this.runtime, this.pointer, this.owned);
+  final NativeJsfBindings bindings;
+  final ffi.Pointer<JSFRuntime> runtime;
+  final bool owned;
+  ffi.Pointer<JSFValue> pointer;
+  bool runtimeDisposed = false;
+  void free() {
+    if (pointer != ffi.nullptr && owned) bindings.JSF_ValueFree(pointer);
+    pointer = ffi.nullptr;
   }
 }
 
-final Map<int, Set<JsValue>> _liveValues = <int, Set<JsValue>>{};
+final _valueFinalizer = Finalizer<_ValueState>((state) {
+  state.free();
+  final values = _liveValues[state.runtime.address];
+  values?.remove(state);
+  if (values != null && values.isEmpty) {
+    _liveValues.remove(state.runtime.address);
+  }
+});
+
+void disposeRuntimeValues(ffi.Pointer<JSFRuntime> runtime) {
+  final values = _liveValues.remove(runtime.address);
+  if (values == null) return;
+  for (final state in values) {
+    state.runtimeDisposed = true;
+    state.free();
+  }
+}
+
+final Map<int, Set<_ValueState>> _liveValues = {};
 
 JsValue wrapJsValue(
   NativeJsfBindings bindings,
