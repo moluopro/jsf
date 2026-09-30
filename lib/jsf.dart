@@ -24,4 +24,5 @@ export 'src/value.dart'
 
 export 'src/fetch.dart';
 export 'src/diagnostics.dart';
+export 'src/worker_io.dart' if (dart.library.js_interop) 'src/worker_web.dart';
 export 'src/value_scope.dart';
