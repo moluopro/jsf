@@ -1,0 +1,114 @@
+name: Runtime validation
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+          path-type: inherit
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"${{ steps.msys2.outputs.msys2-location }}/mingw64/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append'
+      - run: cmake -S src -B build/native -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=gcc -DJSF_BUILD_TESTS=ON
+      - run: cmake --build build/native --parallel 4
+      - run: ctest --test-dir build/native --output-on-failure
+      - if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then extension=dylib; else extension=so; fi
+          export JSF_LIBRARY_PATH="$PWD/build/native/libjsf.$extension"
+          flutter test --reporter expanded
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:JSF_LIBRARY_PATH = "$pwd/build/native/jsf.dll"
+          # Flutter's shell tools must come from Git for Windows.
+          $env:Path = ($env:Path -split ';' | Where-Object { $_ -notmatch 'msys64|mingw64' }) -join ';'
+          flutter test --reporter expanded
+          exit $LASTEXITCODE
+      - if: runner.os == 'Linux'
+        run: flutter analyze
+      - if: runner.os == 'Linux'
+        run: flutter test --platform chrome test/web_module_test.dart test/web_fetch_test.dart test/web_runtime_safety_test.dart test/runtime_contract_test.dart --reporter expanded
+  minimum-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.19.6
+          channel: stable
+      - run: flutter pub get
+      - run: cmake -S src -B build/native -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake --build build/native --parallel 4
+      - run: JSF_LIBRARY_PATH="$PWD/build/native/libjsf.so" flutter test --reporter expanded
+      - run: flutter test --platform chrome test/web_module_test.dart test/web_fetch_test.dart test/web_runtime_safety_test.dart test/runtime_contract_test.dart --reporter expanded
+  sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: cmake -S src -B build/sanitizer -DCMAKE_BUILD_TYPE=Debug -DJSF_BUILD_TESTS=ON -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - run: cmake --build build/sanitizer --parallel 4
+      - run: ctest --test-dir build/sanitizer --output-on-failure
+  apple-consumer:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: |
+          flutter create --platforms=macos,ios --empty /tmp/jsf_consumer
+          cd /tmp/jsf_consumer
+          flutter pub add jsf --path "$GITHUB_WORKSPACE"
+          cp "$GITHUB_WORKSPACE/test/consumer_main.dart" lib/main.dart
+          flutter build macos --debug
+          build/macos/Build/Products/Debug/jsf_consumer.app/Contents/MacOS/jsf_consumer
+          flutter build macos --release
+          build/macos/Build/Products/Release/jsf_consumer.app/Contents/MacOS/jsf_consumer
+          flutter build ios --simulator --debug
+      - name: CocoaPods release consumer
+        run: |
+          flutter create --platforms=macos --empty /tmp/jsf_pods_consumer
+          cd /tmp/jsf_pods_consumer
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          p = Path('pubspec.yaml')
+          p.write_text(p.read_text().replace('\nflutter:\n', '\nflutter:\n  config:\n    enable-swift-package-manager: false\n'))
+          PYCODE
+          flutter pub add jsf --path "$GITHUB_WORKSPACE"
+          cp "$GITHUB_WORKSPACE/test/consumer_main.dart" lib/main.dart
+          flutter build macos --release
+          test -f macos/Pods/Manifest.lock
+          build/macos/Build/Products/Release/jsf_pods_consumer.app/Contents/MacOS/jsf_pods_consumer
+  android-consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: |
+          flutter create --platforms=android --empty /tmp/jsf_consumer
+          cd /tmp/jsf_consumer
+          flutter pub add jsf --path "$GITHUB_WORKSPACE"
+          cp "$GITHUB_WORKSPACE/test/consumer_main.dart" lib/main.dart
+          flutter build apk --debug
