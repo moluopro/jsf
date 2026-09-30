@@ -8,6 +8,10 @@ cmake_minimum_required(VERSION 3.14)
 set(PROJECT_NAME "jsf")
 project(${PROJECT_NAME} LANGUAGES NONE)
 
+if(DEFINED FLUTTER_TARGET_PLATFORM AND NOT FLUTTER_TARGET_PLATFORM STREQUAL "windows-x64")
+  message(FATAL_ERROR "JSF ships a Windows x64 DLL. The selected application architecture is ${FLUTTER_TARGET_PLATFORM}; supply a matching native build before targeting it.")
+endif()
+
 set(JSF_PREBUILT_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/jsf.dll")
 
 if(NOT EXISTS "${JSF_PREBUILT_LIBRARY}")
