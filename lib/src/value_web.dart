@@ -1,15 +1,49 @@
 import 'dart:convert';
 import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
+import 'dart:typed_data';
 
 import 'conversion.dart';
+import 'exception.dart';
+import 'web_compiler_js.dart';
+import 'web_module_js.dart';
 
 /// Browser-backed handle to a JavaScript value.
 ///
 /// The web implementation mirrors the native [JsValue] API where browser
 /// platform limits allow it.
+class WebValueOwner {
+  bool disposed = false;
+  JSObject? realm;
+  int _nextHandle = 1;
+  final Map<int, WeakReference<JsValue>> _values = {};
+  int get liveHandles {
+    _values.removeWhere((_, value) => value.target == null);
+    return _values.length;
+  }
+
+  void dispose() {
+    for (final weak in _values.values.toList()) {
+      weak.target?.dispose();
+    }
+    _values.clear();
+    realm = null;
+    disposed = true;
+  }
+}
+
 class JsValue {
   /// Wraps a browser JavaScript value.
-  JsValue(this._value, {bool owned = true}) : _owned = owned;
+  JsValue(this._value, {bool owned = true, this.owner}) : _owned = owned {
+    _jsfTrackPromise(_value, owner?.realm);
+    if (_owned && owner != null) {
+      _id = owner!._nextHandle++;
+      owner!._values[_id!] = WeakReference(this);
+    }
+  }
+
+  final WebValueOwner? owner;
+  int? _id;
 
   JSAny? _value;
   final bool _owned;
@@ -33,13 +67,23 @@ class JsValue {
   /// Array-like length, or `0` for non-array values.
   int get length => _jsfValueLength(nativeValue).toDartInt;
 
-  /// Promise state placeholder for API parity with native platforms.
-  int get promiseState => 0;
+  /// Promise state: 0 pending, 1 fulfilled, 2 rejected.
+  int get promiseState =>
+      webInterop(() => _jsfPromiseState(nativeValue)).toDartInt;
 
   /// Converts this JavaScript value to a Dart snapshot.
   dynamic toDart() {
-    final encoded = _jsfTransferEncode(nativeValue);
+    if (type == 11) return toBytes();
+    final encoded = webInterop(() => _jsfTransferEncode(nativeValue));
     return decodeJsTransferValue(encoded.dartify());
+  }
+
+  /// Copies an ArrayBuffer into Dart bytes.
+  Uint8List toBytes() {
+    if (type != 11) {
+      throw JsException('Expected an ArrayBuffer.', name: 'TypeError');
+    }
+    return _jsfCopyBuffer(nativeValue).toDart;
   }
 
   /// Converts this value to JSF's transfer JSON schema.
@@ -48,44 +92,73 @@ class JsValue {
   }
 
   /// Creates another handle to the same browser JavaScript value.
-  JsValue duplicate() => JsValue(nativeValue);
+  JsValue duplicate() => JsValue(nativeValue, owner: owner);
 
-  /// Returns this handle for API parity with native Promise handling.
-  JsValue promiseResult() => this;
+  /// Returns a new handle to the settlement value, or undefined while pending.
+  JsValue promiseResult() =>
+      JsValue(webInterop(() => _jsfPromiseResult(nativeValue)), owner: owner);
 
   /// Reads an object property by string [key].
   JsValue getPropertyValue(String key) {
-    return JsValue(_jsfGetProperty(nativeValue, key.toJS));
+    final raw = nativeValue;
+    return JsValue(webInterop(() => _jsfGetProperty(raw, key.toJS)),
+        owner: owner);
   }
 
   /// Sets an object property by string [key].
   void setPropertyValue(String key, JsValue value) {
-    _jsfSetProperty(nativeValue, key.toJS, value.nativeValue);
+    checkOwner(value);
+    final raw = nativeValue, property = value.nativeValue;
+    webInterop(() => _jsfSetProperty(raw, key.toJS, property));
   }
 
   /// Reads an array-like item by [index].
   JsValue getIndexValue(int index) {
-    return JsValue(_jsfGetIndex(nativeValue, index.toJS));
+    RangeError.checkValueInInterval(index, 0, 4294967294, 'index');
+    final raw = nativeValue;
+    return JsValue(webInterop(() => _jsfGetIndex(raw, index.toJS)),
+        owner: owner);
   }
 
   /// Sets an array-like item by [index].
   void setIndexValue(int index, JsValue value) {
-    _jsfSetIndex(nativeValue, index.toJS, value.nativeValue);
+    checkOwner(value);
+    RangeError.checkValueInInterval(index, 0, 4294967294, 'index');
+    final raw = nativeValue, element = value.nativeValue;
+    webInterop(() => _jsfSetIndex(raw, index.toJS, element));
   }
 
   /// Calls this value as a JavaScript function.
   JsValue callWithValues(List<JsValue> arguments, {JsValue? thisValue}) {
+    for (final value in arguments) {
+      checkOwner(value);
+    }
+    if (thisValue != null) checkOwner(thisValue);
     final args = arguments.map((value) => value.nativeValue).toList().toJS;
-    return JsValue(_jsfCall(nativeValue, thisValue?.nativeValue, args));
+    final raw = nativeValue, thisRaw = thisValue?.nativeValue;
+    return JsValue(webInterop(() => _jsfCall(raw, thisRaw, args)),
+        owner: owner);
   }
 
   /// Disposes this browser-side handle wrapper.
   void dispose() {
+    if (_id != null) owner?._values.remove(_id);
     _value = null;
     _disposed = true;
   }
 
+  void checkOwner(JsValue value) {
+    _ensureAlive();
+    value._ensureAlive();
+    if (!identical(owner, value.owner)) {
+      throw ArgumentError('JavaScript value belongs to a different runtime.');
+    }
+  }
+
   void _ensureAlive() {
+    if (owner?.disposed == true) {
+      throw StateError('JavaScript runtime has been disposed.');
+    }
     if (_disposed) {
       throw StateError('JavaScript value has been disposed.');
     }
@@ -94,10 +167,11 @@ class JsValue {
 
 /// Converts a Dart value to a browser JavaScript value through JSF's transfer
 /// schema.
-JSAny? webValueFromDart(Object? value) {
+JSAny? webValueFromDart(Object? value, [JSObject? realm]) {
   ensureJsWebHelpers();
+  if (value is Uint8List) return _jsfBufferFromBytes(value.toJS, realm);
   final json = jsonEncode(encodeJsTransferValue(value));
-  return _jsfTransferRevive(_jsonParse(json.toJS));
+  return webInterop(() => _jsfTransferRevive(_jsonParse(json.toJS), realm));
 }
 
 /// Converts a browser JavaScript value to a Dart snapshot.
@@ -107,13 +181,19 @@ Object? webValueToDart(JSAny? value) {
 }
 
 /// Installs JSF's browser helper functions once per page.
-void ensureJsWebHelpers() {
-  if (_helpersInstalled) {
-    return;
+void ensureJsWebHelpers({bool modules = false}) {
+  if (!_helpersInstalled) {
+    _jsEval(_helperSource.toJS);
+    _jsEval(webModuleRuntime.toJS);
+    _helpersInstalled = true;
   }
-  _jsEval(_helperSource.toJS);
-  _helpersInstalled = true;
+  if (modules && !_compilerInstalled) {
+    _jsEval(webModuleCompiler.toJS);
+    _compilerInstalled = true;
+  }
 }
+
+bool _compilerInstalled = false;
 
 bool _helpersInstalled = false;
 
@@ -121,7 +201,7 @@ const _helperSource = r'''
 (function(){
 if(globalThis.__jsfTransferEncode)return;
 globalThis.__jsfTransferEncode=function(v){
-  const seen=[];
+  const seen=new Set();
   function enc(x){
     if(x===undefined)return {'$jsf.type':'Undefined'};
     if(typeof x==='bigint')return {'$jsf.type':'BigInt','value':x.toString()};
@@ -135,46 +215,65 @@ globalThis.__jsfTransferEncode=function(v){
     if(typeof x==='function')return {'$jsf.type':'Function'};
     if(typeof x==='symbol')return {'$jsf.type':'Symbol','value':String(x)};
     if(x===null||typeof x!=='object')return x;
-    if(seen.indexOf(x)>=0)throw new TypeError('circular reference');
-    seen.push(x);
+    if(seen.has(x))throw new TypeError('circular reference');
+    seen.add(x);
     try{
-      if(x instanceof Date)return {'$jsf.type':'Date','value':x.toISOString()};
-      if(x instanceof RegExp)return {'$jsf.type':'RegExp','source':x.source,'flags':x.flags};
-      if(x instanceof Error)return {'$jsf.type':'Error','name':x.name,'message':x.message,'stack':x.stack};
-      if(x instanceof Map)return {'$jsf.type':'Map','entries':Array.from(x.entries(),e=>[enc(e[0]),enc(e[1])])};
-      if(x instanceof Set)return {'$jsf.type':'Set','values':Array.from(x.values(),enc)};
-      if(typeof ArrayBuffer!=='undefined'&&ArrayBuffer.isView(x))return {'$jsf.type':'TypedArray','name':x.constructor.name,'values':Array.from(x)};
-      if(typeof ArrayBuffer!=='undefined'&&x instanceof ArrayBuffer)return {'$jsf.type':'ArrayBuffer','bytes':Array.from(new Uint8Array(x))};
+      if(Object.prototype.toString.call(x)==='[object Date]')return {'$jsf.type':'Date','value':x.toISOString()};
+      if(Object.prototype.toString.call(x)==='[object RegExp]')return {'$jsf.type':'RegExp','source':x.source,'flags':x.flags};
+      if(/Error\]$/.test(Object.prototype.toString.call(x)))return {'$jsf.type':'Error','name':x.name,'message':x.message,'stack':x.stack};
+      if(Object.prototype.toString.call(x)==='[object Map]')return {'$jsf.type':'Map','entries':Array.from(x.entries(),e=>[enc(e[0]),enc(e[1])])};
+      if(Object.prototype.toString.call(x)==='[object Set]')return {'$jsf.type':'Set','values':Array.from(x.values(),enc)};
+      if(Object.prototype.toString.call(x)==='[object DataView]')return {'$jsf.type':'DataView','bytes':Array.from(new Uint8Array(x.buffer,x.byteOffset,x.byteLength))};
+      if(ArrayBuffer.isView(x))return {'$jsf.type':'TypedArray','name':x.constructor.name,'values':Array.from(x,enc)};
+      if(Object.prototype.toString.call(x)==='[object ArrayBuffer]')return {'$jsf.type':'ArrayBuffer','bytes':Array.from(new Uint8Array(x))};
       if(Array.isArray(x)){const a=[];for(let i=0;i<x.length;i++)a.push(Object.prototype.hasOwnProperty.call(x,i)?enc(x[i]):{'$jsf.type':'ArrayHole'});return a;}
-      const out={};Object.keys(x).forEach(k=>out[k]=enc(x[k]));return out;
-    }finally{seen.pop();}
+      const out=Object.create(null);Object.keys(x).forEach(k=>out[k]=enc(x[k]));return Object.hasOwn(x,'$jsf.type')?{'$jsf.type':'Object',entries:Object.entries(out)}:out;
+    }finally{seen.delete(x);}
   }
   return enc(v);
 };
-globalThis.__jsfTransferRevive=function(v){
+globalThis.__jsfTransferRevive=function(v,realm){
+  const g=realm||globalThis;
   function r(x){
-    if(Array.isArray(x)){const a=[];for(let i=0;i<x.length;i++){const item=x[i];if(item&&item['$jsf.type']==='ArrayHole')a.length=i+1;else a[i]=r(item);}return a;}
+    if(Array.isArray(x)){const a=new g.Array();for(let i=0;i<x.length;i++){const item=x[i];if(item&&item['$jsf.type']==='ArrayHole')a.length=i+1;else a[i]=r(item);}return a;}
     if(!x||typeof x!=='object')return x;
     const t=x['$jsf.type'];
     if(t==='Undefined')return undefined;
     if(t==='BigInt')return BigInt(x.value);
     if(t==='Number'){if(x.value==='NaN')return NaN;if(x.value==='Infinity')return Infinity;if(x.value==='-Infinity')return -Infinity;if(x.value==='-0')return -0;return Number(x.value);}
-    if(t==='Date')return new Date(x.value);
-    if(t==='RegExp')return new RegExp(x.source||'',x.flags||'');
-    if(t==='Error'){const e=new Error(x.message||'');e.name=x.name||'Error';if(x.stack)e.stack=x.stack;return e;}
-    if(t==='Map')return new Map((x.entries||[]).map(e=>[r(e[0]),r(e[1])]));
-    if(t==='Set')return new Set((x.values||[]).map(r));
-    if(t==='ArrayBuffer')return new Uint8Array(x.bytes||[]).buffer;
-    if(t==='TypedArray'){const C=globalThis[x.name]||Array;try{return new C(x.values||[]);}catch(_){return x.values||[];}}
-    const out={};Object.keys(x).forEach(k=>{if(k!=='$jsf.type')out[k]=r(x[k]);});return out;
+    if(t==='Date')return new g.Date(x.value);
+    if(t==='RegExp')return new g.RegExp(x.source||'',x.flags||'');
+    if(t==='Error'){const e=new g.Error(x.message||'');e.name=x.name||'Error';if(x.stack)e.stack=x.stack;return e;}
+    if(t==='Map')return new g.Map((x.entries||[]).map(e=>[r(e[0]),r(e[1])]));
+    if(t==='Set')return new g.Set((x.values||[]).map(r));
+    if(t==='ArrayBuffer')return new g.Uint8Array(x.bytes||[]).buffer;
+    if(t==='DataView')return new g.DataView(new g.Uint8Array(x.bytes||[]).buffer);
+    if(t==='TypedArray'){const C=g[x.name];if(typeof C!=='function'||!C.BYTES_PER_ELEMENT)throw new TypeError('Unknown typed array');return new C((x.values||[]).map(r));}
+    const out=new g.Object();const entries=t==='Object'?x.entries:Object.entries(x);for(const [key,value] of entries)Object.defineProperty(out,key,{value:r(value),writable:true,enumerable:true,configurable:true});return out;
   }
   return r(v);
 };
+globalThis.__jsfCopyBuffer=value=>new Uint8Array(new Uint8Array(value));
+globalThis.__jsfBufferFromBytes=(bytes,realm)=>new (realm||globalThis).Uint8Array(bytes).buffer;
+globalThis.__jsfUnwrapFuture=promise=>promise.then(result=>{if(result.error)throw result.value;return result.value;});
 globalThis.__jsfGetProperty=(o,k)=>o==null?undefined:o[k];
 globalThis.__jsfSetProperty=(o,k,v)=>{ if(o!=null)o[k]=v; };
 globalThis.__jsfGetIndex=(o,i)=>o==null?undefined:o[i];
 globalThis.__jsfSetIndex=(o,i,v)=>{ if(o!=null)o[i]=v; };
-globalThis.__jsfCall=(f,t,args)=>typeof f==='function'?f.apply(t,args||[]):undefined;
+globalThis.__jsfCall=(f,t,args)=>{if(typeof f!=='function')throw new TypeError('Value is not callable');return Reflect.apply(f,t,args||[]);};
+const promises=new WeakMap();
+globalThis.__jsfTrackPromise=function(value,realm){
+  if(!value||typeof value.then!=='function'||promises.has(value))return;
+  const state={state:0,value:undefined,observed:false};promises.set(value,state);
+  const promise=Promise.resolve(value);
+  promise.then(result=>{state.state=1;state.value=result;},error=>{state.state=2;state.value=error;
+    if(realm)setTimeout(()=>{if(!state.observed&&!realm.__jsfDisposed)realm.dispatchEvent(new realm.PromiseRejectionEvent('unhandledrejection',{promise,reason:error}));},0);
+  });
+};
+globalThis.__jsfObservePromise=function(value){const state=promises.get(value);if(state)state.observed=true;};
+globalThis.__jsfPromiseState=function(value){const state=promises.get(value);if(!state)throw new TypeError('Expected a Promise');return state.state;};
+globalThis.__jsfPromiseResult=function(value){const state=promises.get(value);if(!state)throw new TypeError('Expected a Promise');return state.value;};
+globalThis.__jsfCallback=function(invoke,realm){const bridge={invoke(args){if(!invoke)throw new realm.Error('Dart callback is not registered');const result=invoke(args);if(result.error)throw result.value;return result.value;},dispose(){invoke=null;}};bridge.function=realm.Function('bridge','return function(...args){return bridge.invoke(args)}')(bridge);return bridge;};
 globalThis.__jsfValueType=function(v){
   if(v===undefined)return 0;
   if(v===null)return 1;
@@ -182,6 +281,7 @@ globalThis.__jsfValueType=function(v){
   if(typeof v==='number')return Number.isInteger(v)?3:4;
   if(typeof v==='bigint')return 5;
   if(typeof v==='string')return 6;
+  if(Object.prototype.toString.call(v)==='[object ArrayBuffer]')return 11;
   if(Array.isArray(v))return 7;
   if(typeof v==='function')return 9;
   if(v&&typeof v.then==='function')return 10;
@@ -189,257 +289,6 @@ globalThis.__jsfValueType=function(v){
   return 100;
 };
 globalThis.__jsfValueLength=function(v){ return v&&typeof v.length==='number'?v.length:0; };
-const moduleRegistries=new Map();
-function moduleRegistry(id){
-  id=String(id);
-  let r=moduleRegistries.get(id);
-  if(!r){
-    r={modules:new Map(),aliases:new Map(),cache:new Map(),nativeUrls:new Map()};
-    moduleRegistries.set(id,r);
-  }
-  return r;
-}
-function revokeNativeUrls(r){
-  r.nativeUrls.forEach(function(url){
-    try{URL.revokeObjectURL(url);}catch(_){}
-  });
-  r.nativeUrls.clear();
-}
-function normalizePath(name){
-  const out=[];
-  String(name).split('/').forEach(function(part){
-    if(!part||part==='.')return;
-    if(part==='..')out.pop();
-    else out.push(part);
-  });
-  return out.join('/');
-}
-function dirname(name){
-  name=String(name||'');
-  const index=name.lastIndexOf('/');
-  return index<0?'':name.slice(0,index);
-}
-function normalizeModuleSpecifier(specifier,referrer){
-  let spec=String(specifier);
-  if(spec.startsWith('.')){
-    const base=dirname(referrer);
-    spec=base?base+'/'+spec:spec;
-  }
-  return normalizePath(spec);
-}
-function resolveModule(r,specifier,referrer){
-  const normalized=normalizeModuleSpecifier(specifier,referrer);
-  return r.aliases.has(normalized)?r.aliases.get(normalized):normalized;
-}
-function splitTopLevel(text){
-  const parts=[];
-  let start=0,depth=0,quote='',escape=false;
-  for(let i=0;i<text.length;i++){
-    const c=text[i];
-    if(quote){
-      if(escape){escape=false;continue;}
-      if(c==='\\'){escape=true;continue;}
-      if(c===quote)quote='';
-      continue;
-    }
-    if(c==='"'||c==="'"||c==='`'){quote=c;continue;}
-    if(c==='('||c==='['||c==='{')depth++;
-    else if(c===')'||c===']'||c==='}')depth--;
-    else if(c===','&&depth===0){
-      parts.push(text.slice(start,i).trim());
-      start=i+1;
-    }
-  }
-  const tail=text.slice(start).trim();
-  if(tail)parts.push(tail);
-  return parts;
-}
-function declarationNames(declarations){
-  return splitTopLevel(declarations).map(function(part){
-    const m=part.match(/^\s*([A-Za-z_$][\w$]*)/);
-    return m?m[1]:null;
-  }).filter(Boolean);
-}
-function namedImportPattern(names){
-  return names.split(',').map(function(part){
-    part=part.trim();
-    if(!part)return '';
-    const m=part.match(/^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/);
-    return m?m[1]+': '+m[2]:part;
-  }).filter(Boolean).join(', ');
-}
-function importStatement(bindings,specifier){
-  bindings=bindings.trim();
-  const spec=JSON.stringify(specifier);
-  if(!bindings)return '__import('+spec+');';
-  if(bindings.startsWith('{')){
-    return 'const {'+namedImportPattern(bindings.slice(1,-1))+'}=__import('+spec+');';
-  }
-  if(bindings.startsWith('*')){
-    const m=bindings.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
-    if(!m)throw new SyntaxError('Unsupported namespace import: '+bindings);
-    return 'const '+m[1]+'=__import('+spec+');';
-  }
-  const comma=bindings.indexOf(',');
-  if(comma>=0){
-    const first=bindings.slice(0,comma).trim();
-    const rest=bindings.slice(comma+1).trim();
-    return 'const '+first+'=__import('+spec+').default;'+importStatement(rest,specifier);
-  }
-  return 'const '+bindings+'=__import('+spec+').default;';
-}
-function rewriteDynamicImports(source,runtimeId,referrer,moduleMode){
-  return String(source).replace(/\bimport\s*\(\s*(['"])([^'"]+)\1\s*\)/g,function(_,q,spec){
-    if(moduleMode)return '__importAsync('+JSON.stringify(spec)+')';
-    return 'globalThis.__jsfModuleImport('+JSON.stringify(runtimeId)+','+JSON.stringify(spec)+','+JSON.stringify(referrer||'<eval>')+')';
-  });
-}
-function nativeModuleUrl(runtimeId,specifier,referrer){
-  const r=moduleRegistry(runtimeId);
-  const name=resolveModule(r,specifier,referrer||'');
-  if(r.nativeUrls.has(name))return r.nativeUrls.get(name);
-  if(!r.modules.has(name))throw new Error('JSF module not found: '+name);
-  const source=rewriteNativeModuleSpecifiers(r.modules.get(name),runtimeId,name);
-  const blob=new Blob([source+'\n//# sourceURL=jsf-module://'+name],{type:'text/javascript'});
-  const url=URL.createObjectURL(blob);
-  r.nativeUrls.set(name,url);
-  return url;
-}
-function nativeEvalUrl(runtimeId,source,filename){
-  const rewritten=rewriteNativeModuleSpecifiers(source,runtimeId,String(filename||'<eval>'));
-  const blob=new Blob([rewritten+'\n//# sourceURL=jsf-module-eval://'+String(filename||'<eval>')],{type:'text/javascript'});
-  return URL.createObjectURL(blob);
-}
-function rewriteNativeModuleSpecifiers(source,runtimeId,referrer){
-  source=String(source);
-  source=source.replace(/(\bfrom\s*)(['"])([^'"]+)\2/g,function(_,prefix,quote,spec){
-    return prefix+quote+nativeModuleUrl(runtimeId,spec,referrer)+quote;
-  });
-  source=source.replace(/(\bimport\s*)(['"])([^'"]+)\2/g,function(_,prefix,quote,spec){
-    return prefix+quote+nativeModuleUrl(runtimeId,spec,referrer)+quote;
-  });
-  source=source.replace(/\bimport\s*\(\s*(['"])([^'"]+)\1\s*\)/g,function(_,quote,spec){
-    return 'import('+JSON.stringify(nativeModuleUrl(runtimeId,spec,referrer))+')';
-  });
-  return source;
-}
-function transpileModule(source,runtimeId,referrer){
-  const exportNames=[];
-  source=rewriteDynamicImports(source,runtimeId,referrer,true);
-  source=source.replace(/\bimport\s+([\s\S]*?)\s+from\s*(['"])([^'"]+)\2\s*;?/g,function(_,bindings,_q,spec){
-    return importStatement(bindings,spec);
-  });
-  source=source.replace(/\bimport\s*(['"])([^'"]+)\1\s*;?/g,function(_,q,spec){
-    return '__import('+JSON.stringify(spec)+');';
-  });
-  source=source.replace(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)\s*\(/g,function(_,name){
-    exportNames.push({local:name,exported:'default'});
-    return 'function '+name+'(';
-  });
-  source=source.replace(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/g,function(_,name){
-    exportNames.push({local:name,exported:'default'});
-    return 'class '+name;
-  });
-  source=source.replace(/\bexport\s+default\s+([^;]+);/g,function(_,expr){
-    return '__exports.default=('+expr+');';
-  });
-  source=source.replace(/\bexport\s+(async\s+function|function|class)\s+([A-Za-z_$][\w$]*)/g,function(_,kind,name){
-    exportNames.push({local:name,exported:name});
-    return kind+' '+name;
-  });
-  source=source.replace(/\bexport\s+(const|let|var)\s+([^;]+);/g,function(_,kind,decls){
-    declarationNames(decls).forEach(function(name){
-      exportNames.push({local:name,exported:name});
-    });
-    return kind+' '+decls+';';
-  });
-  source=source.replace(/\bexport\s+\*\s+from\s*(['"])([^'"]+)\1\s*;?/g,function(_,q,spec){
-    return '(()=>{const m=__import('+JSON.stringify(spec)+');Object.keys(m).forEach(function(k){if(k!=="default")__exports[k]=m[k];});})();';
-  });
-  source=source.replace(/\bexport\s*\{([^}]+)\}\s+from\s*(['"])([^'"]+)\2\s*;?/g,function(_,list,q,spec){
-    return splitTopLevel(list).map(function(part){
-      const m=part.match(/^([A-Za-z_$][\w$]*|default)(?:\s+as\s+([A-Za-z_$][\w$]*|default))?$/);
-      if(!m)throw new SyntaxError('Unsupported re-export: '+part);
-      return '__exports['+JSON.stringify(m[2]||m[1])+']=__import('+JSON.stringify(spec)+')['+JSON.stringify(m[1])+'];';
-    }).join('');
-  });
-  source=source.replace(/\bexport\s*\{([^}]+)\}\s*;?/g,function(_,list){
-    return splitTopLevel(list).map(function(part){
-      const m=part.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*|default))?$/);
-      if(!m)throw new SyntaxError('Unsupported export: '+part);
-      return '__exports['+JSON.stringify(m[2]||m[1])+']='+m[1]+';';
-    }).join('');
-  });
-  const footer=exportNames.map(function(item){
-    return '__exports['+JSON.stringify(item.exported)+']='+item.local+';';
-  }).join('');
-  return source+'\n;'+footer;
-}
-function requireModule(runtimeId,specifier,referrer){
-  const r=moduleRegistry(runtimeId);
-  const name=resolveModule(r,specifier,referrer||'');
-  if(r.cache.has(name))return r.cache.get(name).exports;
-  if(!r.modules.has(name))throw new Error('JSF module not found: '+name);
-  const record={exports:{}};
-  r.cache.set(name,record);
-  const code=transpileModule(r.modules.get(name),runtimeId,name);
-  const importer=function(spec){return requireModule(runtimeId,spec,name);};
-  const importerAsync=function(spec){return Promise.resolve(requireModule(runtimeId,spec,name));};
-  try{
-    Function('__exports','__import','__importAsync','globalThis',code)(record.exports,importer,importerAsync,globalThis);
-  }catch(error){
-    r.cache.delete(name);
-    throw error;
-  }
-  return record.exports;
-}
-globalThis.__jsfEval=function(runtimeId,code,filename){
-  return (0,eval)(rewriteDynamicImports(code,runtimeId,filename||'<eval>',false));
-};
-globalThis.__jsfModuleEval=function(runtimeId,code,filename){
-  const exports={};
-  const referrer=String(filename||'<eval>');
-  const moduleCode=transpileModule(code,runtimeId,referrer);
-  const importer=function(spec){return requireModule(runtimeId,spec,referrer);};
-  const importerAsync=function(spec){return Promise.resolve(requireModule(runtimeId,spec,referrer));};
-  Function('__exports','__import','__importAsync','globalThis',moduleCode)(exports,importer,importerAsync,globalThis);
-  return exports;
-};
-globalThis.__jsfModuleImport=function(runtimeId,specifier,referrer){
-  return import(nativeModuleUrl(runtimeId,specifier,referrer||'<eval>'));
-};
-globalThis.__jsfModuleEvalAsync=function(runtimeId,code,filename){
-  const url=nativeEvalUrl(runtimeId,code,filename);
-  return import(url).finally(function(){try{URL.revokeObjectURL(url);}catch(_){}});
-};
-globalThis.__jsfModuleLoad=function(runtimeId,moduleName){
-  return requireModule(runtimeId,moduleName,'');
-};
-globalThis.__jsfModuleRegister=function(runtimeId,moduleName,moduleSource){
-  const r=moduleRegistry(runtimeId);
-  const name=normalizeModuleSpecifier(moduleName,'');
-  r.modules.set(name,String(moduleSource));
-  r.cache.clear();
-  revokeNativeUrls(r);
-};
-globalThis.__jsfModuleAlias=function(runtimeId,moduleName,resolvedName){
-  const r=moduleRegistry(runtimeId);
-  r.aliases.set(String(moduleName),String(resolvedName));
-  r.cache.clear();
-  revokeNativeUrls(r);
-};
-globalThis.__jsfModuleClear=function(runtimeId){
-  const r=moduleRegistry(runtimeId);
-  r.modules.clear();
-  r.aliases.clear();
-  r.cache.clear();
-  revokeNativeUrls(r);
-};
-globalThis.__jsfModuleDispose=function(runtimeId){
-  const r=moduleRegistries.get(String(runtimeId));
-  if(r)revokeNativeUrls(r);
-  moduleRegistries.delete(String(runtimeId));
-};
 })();
 ''';
 
@@ -453,7 +302,7 @@ external JSAny? _jsonParse(JSString text);
 external JSAny _jsfTransferEncode(JSAny? value);
 
 @JS('__jsfTransferRevive')
-external JSAny? _jsfTransferRevive(JSAny? value);
+external JSAny? _jsfTransferRevive(JSAny? value, JSObject? realm);
 
 @JS('__jsfGetProperty')
 external JSAny? _jsfGetProperty(JSAny? object, JSString key);
@@ -476,3 +325,39 @@ external JSNumber _jsfValueType(JSAny? value);
 
 @JS('__jsfValueLength')
 external JSNumber _jsfValueLength(JSAny? value);
+
+@JS('__jsfTrackPromise')
+external void _jsfTrackPromise(JSAny? value, JSObject? realm);
+@JS('__jsfPromiseState')
+external JSNumber _jsfPromiseState(JSAny? value);
+@JS('__jsfPromiseResult')
+external JSAny? _jsfPromiseResult(JSAny? value);
+
+T webInterop<T>(T Function() operation) {
+  try {
+    return operation();
+  } catch (error) {
+    throw webException(error);
+  }
+}
+
+JsException webException(Object error) {
+  if (error is JsException) return error;
+  try {
+    final object = error as JSObject;
+    return JsException((object['message']?.dartify() ?? error).toString(),
+        name: (object['name']?.dartify() ?? 'Error').toString(),
+        stack: object['stack']?.dartify()?.toString(),
+        cause: object['cause']?.dartify());
+  } catch (_) {
+    return JsException(error.toString());
+  }
+}
+
+@JS('__jsfObservePromise')
+external void webObservePromise(JSAny? value);
+
+@JS('__jsfCopyBuffer')
+external JSUint8Array _jsfCopyBuffer(JSAny? value);
+@JS('__jsfBufferFromBytes')
+external JSAny? _jsfBufferFromBytes(JSUint8Array bytes, JSObject? realm);
