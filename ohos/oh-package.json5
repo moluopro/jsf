@@ -1,6 +1,6 @@
 {
   "name": "jsf",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "A high performance JavaScript engine, available out of the box in Flutter.",
   "author": "",
   "license": "MIT",

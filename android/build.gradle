@@ -1,7 +1,7 @@
 // The Android Gradle Plugin builds the native code with the Android NDK.
 
 group = "com.abandoft.jsf"
-version = "1.2.0"
+version = "1.2.1"
 
 buildscript {
     repositories {
