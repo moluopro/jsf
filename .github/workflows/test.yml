@@ -84,7 +84,10 @@ jobs:
           build/macos/Build/Products/Debug/jsf_consumer.app/Contents/MacOS/jsf_consumer
           flutter build macos --release
           build/macos/Build/Products/Release/jsf_consumer.app/Contents/MacOS/jsf_consumer
+          python3 "$GITHUB_WORKSPACE/test/apple_archive_test.py" build/macos/Build/Products/Release/jsf_consumer.app
           flutter build ios --simulator --debug
+          flutter build ipa --release --no-codesign
+          python3 "$GITHUB_WORKSPACE/test/apple_archive_test.py" build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app
       - name: CocoaPods release consumer
         run: |
           flutter create --platforms=macos --empty /tmp/jsf_pods_consumer
