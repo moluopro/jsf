@@ -14,7 +14,8 @@ let package = Package(
         .macOS("10.15")
     ],
     products: [
-        .library(name: "jsf", targets: ["jsf"])
+        // Keep FFI exports in a framework, outside Runner's archive stripping.
+        .library(name: "jsf", type: .dynamic, targets: ["jsf"])
     ],
     dependencies: [
         .package(name: "FlutterFramework", path: "../FlutterFramework")
@@ -30,12 +31,15 @@ let package = Package(
                 .define("_GNU_SOURCE", to: "1"),
                 .define("CONFIG_VERSION", to: "\"\(quickjsVersion)\""),
                 .unsafeFlags([
+                    "-fvisibility=hidden",
                     "-fwrapv",
                     "-Wno-shorten-64-to-32",
                     "-Wno-conditional-uninitialized",
                     "-Wno-comma"
                 ])
             ],
+            // Keep a native reference so the app loads the framework even
+            // though Dart resolves its functions by name.
             linkerSettings: [.unsafeFlags(["-Xlinker", "-u", "-Xlinker", "_JSF_RuntimeNew"])]
         )
     ]
