@@ -17,15 +17,9 @@ let package = Package(
         // Keep FFI exports in a framework, outside Runner's archive stripping.
         .library(name: "jsf", type: .dynamic, targets: ["jsf"])
     ],
-    dependencies: [
-        .package(name: "FlutterFramework", path: "../FlutterFramework")
-    ],
     targets: [
         .target(
             name: "jsf",
-            dependencies: [
-                .product(name: "FlutterFramework", package: "FlutterFramework")
-            ],
             cSettings: [
                 .headerSearchPath("include/jsf"),
                 .define("_GNU_SOURCE", to: "1"),
