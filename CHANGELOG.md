@@ -1,3 +1,8 @@
+## 1.2.1
+
+* Fix initialization failures in iOS and macOS apps archived with SPM using default settings.
+* Remove an unnecessary bundled framework from SPM builds on iOS and macOS.
+
 ## 1.2.0
 
 * Add callback revocation, handle scopes, and runtime diagnostics.
